@@ -98,15 +98,29 @@ def lookup_section(
     )
 
 
-def build_fast_path_answer(query: str, chunk: LegalChunk) -> LegalAdvice:
-    """Assemble a LegalAdvice directly from a matched section (no LLM)."""
+def lookup_section_chunks(
+    act: str, section_id: str, chunks: list[LegalChunk]
+) -> list[LegalChunk]:
+    """Return every ordered chunk belonging to an exact statutory section."""
+    return sorted(
+        (c for c in chunks if c.act == act and c.section_id == section_id),
+        key=lambda c: c.chunk_id,
+    )
+
+
+def build_fast_path_answer(query: str, chunks: list[LegalChunk]) -> LegalAdvice:
+    """Assemble a direct, complete-section answer without an LLM call."""
+    first = chunks[0]
+    bodies = [
+        c.text.removeprefix(f"{c.summary}\n\n") if c.summary else c.text for c in chunks
+    ]
     return LegalAdvice(
         query=query,
-        answer=f"{chunk.act} Section {chunk.section_id} — {chunk.heading}.\n\n{chunk.text}",
+        answer=f"{first.act} Section {first.section_id} — {first.heading}.\n\n{' '.join(bodies)}",
         citations=[
-            Citation(act=chunk.act, section_id=chunk.section_id, heading=chunk.heading)
+            Citation(act=first.act, section_id=first.section_id, heading=first.heading)
         ],
-        offences_identified=[chunk.heading],
+        offences_identified=[first.heading],
         confidence="high",
         in_corpus=True,
     )
@@ -124,11 +138,13 @@ def fast_path_node(state: AgentState) -> AgentState:
     notes = state.get("trace_notes", [])
 
     if hit is not None:
-        chunk = lookup_section(*hit, corpus)
-        if chunk is not None:
+        section_chunks = lookup_section_chunks(*hit, corpus)
+        if section_chunks:
             return {
                 "fast_path_hit": True,
-                "fast_path_answer": build_fast_path_answer(state["query"], chunk),
+                "fast_path_answer": build_fast_path_answer(
+                    state["query"], section_chunks
+                ),
                 "trace_notes": [*notes, f"fast_path: hit {hit[0]} {hit[1]}"],
             }
 
