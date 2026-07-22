@@ -11,10 +11,10 @@ The live path is intentionally short:
     dense retrieve → ood_gate (ood) .............► END ("not in corpus")
         │ in-corpus
         ▼
-    generator → citation_validator (invalid) → low-confidence response
-        │ valid
-        ▼
-       END
+    generator → citation_validator (invalid) → citation_repair → validate once more
+        │ valid                                      │ invalid
+        ▼                                            ▼
+       END                                   low-confidence response
 
 The older full graph keeps the expander, grader, checker, and rewrite loop for
 evaluation. It is not the API default because the fixed 20-case ablation and a
@@ -24,25 +24,72 @@ into generic low-confidence replies.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 
 from src.agent.state import AgentState
+from src.ingest.chunk_chonkie import LegalChunk
 from src.retrieval.hybrid import RetrievedChunk
 
 RETRIEVAL_LOOP_BUDGET = 2
+CITATION_REPAIR_BUDGET = 1
 RetrievalMode = Literal["hybrid", "dense", "sparse"]
 PipelineVariant = Literal["production", "baseline", "grader", "checker", "full"]
 
-# Retrieval knobs (mirror the baseline: 20 fused candidates -> rerank to 8).
+# Retrieval knobs: 20 candidates -> 12 base chunks, with bounded doctrine hints
+# and missing siblings allowed to extend the generation context to 24.
 RETRIEVE_K = 20
-RERANK_K = 8
+CONTEXT_K = 12
+HINT_K = 8
+MAX_CONTEXT_K = 24
 # The real Qdrant collection is "legal" (see src/retrieval/index.py + the on-disk
 # data/processed/qdrant/collection/legal). NOTE: .env.example still says
 # QDRANT_COLLECTION=bns_sections — that default is stale; the index build names it
 # "legal". Kept here so the graph doesn't silently query an empty collection.
 QDRANT_COLLECTION = "legal"
+
+# ponytail: these cheap hints cover the audited doctrine gaps; replace them with a
+# learned router only if a broader evaluation shows the small table has hit its ceiling.
+_LEGAL_HINT_PATTERNS = (
+    (
+        re.compile(r"\b(plan(?:ned|ning)?|agree(?:d|ment)?)\b", re.I),
+        "criminal conspiracy",
+    ),
+    (
+        re.compile(
+            r"\b(smash(?:ed|ing)?|damag(?:e|ed|ing)|destroy(?:ed|ing)?)\b", re.I
+        ),
+        "mischief damage to property",
+    ),
+    (
+        re.compile(
+            r"(?=.*\b(vot(?:e|er|ers|ing)|election)\b)(?=.*\b(cash|pay|paid|brib\w*)\b)",
+            re.I,
+        ),
+        "punishment for bribery",
+    ),
+    (
+        re.compile(
+            r"(?=.*\b(kill\w*|death|died)\b)(?=.*\b(sudden fight|provok\w*)\b)", re.I
+        ),
+        "culpable homicide punishment",
+    ),
+    (
+        re.compile(
+            r"(?=.*\b(forg\w*|fake signature)\b)"
+            r"(?=.*\b(deed|sale document|property document)\b)",
+            re.I,
+        ),
+        "definition of valuable security",
+    ),
+)
+
+
+def legal_search_hints(query: str) -> list[str]:
+    """Return at most one deterministic doctrine phrase for a matched narrative."""
+    return [hint for pattern, hint in _LEGAL_HINT_PATTERNS if pattern.search(query)][:1]
 
 
 # --- routing decisions (pure; branch on state, no side effects) --------------
@@ -124,6 +171,15 @@ def route_after_citation_validator_once(state: AgentState) -> str:
     return END if state.get("citation_valid") else "low_confidence"
 
 
+def route_after_production_citation_validator(state: AgentState) -> str:
+    """Production gets one same-context repair before an invalid draft is refused."""
+    if state.get("citation_valid"):
+        return END
+    if state.get("iteration", 0) < CITATION_REPAIR_BUDGET:
+        return "citation_repair"
+    return "low_confidence"
+
+
 def route_after_citation_to_checker_once(state: AgentState) -> str:
     """Ablation route: only structurally valid answers reach the checker."""
     return "checker" if state.get("citation_valid") else "low_confidence"
@@ -187,6 +243,42 @@ def _dedupe_by_chunk_id(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
     return sorted(best.values(), key=lambda c: c.rrf_score, reverse=True)
 
 
+def _unique_in_order(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Keep the first occurrence of each chunk without changing ranking order."""
+    seen: set[str] = set()
+    unique: list[RetrievedChunk] = []
+    for chunk in chunks:
+        if chunk.chunk.chunk_id not in seen:
+            seen.add(chunk.chunk.chunk_id)
+            unique.append(chunk)
+    return unique
+
+
+def _complete_repeated_sections(
+    chunks: list[RetrievedChunk], corpus: list[LegalChunk] | None = None
+) -> list[RetrievedChunk]:
+    """Add missing siblings when two chunks from one section already ranked."""
+    counts: dict[tuple[str, str], int] = {}
+    for result in chunks:
+        key = (result.chunk.act, result.chunk.section_id)
+        counts[key] = counts.get(key, 0) + 1
+    repeated = {key for key, count in counts.items() if count > 1}
+    if not repeated:
+        return chunks
+
+    if corpus is None:
+        from src.agent.nodes.fast_path import _resolver
+
+        corpus = _resolver()[0]
+    present = {result.chunk.chunk_id for result in chunks}
+    extras = [
+        RetrievedChunk(chunk=chunk, rrf_score=0.0)
+        for chunk in corpus
+        if (chunk.act, chunk.section_id) in repeated and chunk.chunk_id not in present
+    ]
+    return [*chunks, *extras]
+
+
 def retrieve_node(
     state: AgentState,
     *,
@@ -207,17 +299,22 @@ def retrieve_node(
         if reranker is None:
             reranker = default_reranker
 
-    sub_queries = state.get("sub_queries") or [state["query"]]
+    explicit_sub_queries = state.get("sub_queries") or []
+    sub_queries = explicit_sub_queries or [state["query"]]
     pooled: list[RetrievedChunk] = []
     for sq in sub_queries:
         pooled.extend(retriever.retrieve(sq, top_k=RETRIEVE_K, mode=mode))
 
     deduped = _dedupe_by_chunk_id(pooled)
     ranked = (
-        reranker.rerank(state["query"], deduped, top_k=RERANK_K)
+        reranker.rerank(state["query"], deduped, top_k=CONTEXT_K)
         if use_reranker and reranker is not None
-        else deduped[:RERANK_K]
+        else deduped[:CONTEXT_K]
     )
+    hints = [] if explicit_sub_queries else legal_search_hints(state["query"])
+    for hint in hints:
+        ranked.extend(retriever.retrieve(hint, top_k=HINT_K, mode=mode))
+    ranked = _complete_repeated_sections(_unique_in_order(ranked))[:MAX_CONTEXT_K]
 
     notes = state.get("trace_notes", [])
     return {
@@ -226,6 +323,7 @@ def retrieve_node(
             *notes,
             f"retrieve: {len(sub_queries)} sub-queries -> {len(pooled)} hits "
             f"-> {len(deduped)} unique -> {len(ranked)} {mode}"
+            + (f" + {len(hints)} hint" if hints else "")
             + (" + rerank" if use_reranker else ""),
         ],
     }
@@ -299,7 +397,7 @@ def build_graph(
     from src.agent.nodes.checker import checker_node
     from src.agent.nodes.citation_validator import citation_validator_node
     from src.agent.nodes.fast_path import fast_path_node
-    from src.agent.nodes.generator import generator_node
+    from src.agent.nodes.generator import citation_repair_node, generator_node
     from src.agent.nodes.grader import grader_node
     from src.agent.nodes.intent_expander import intent_expander_node
     from src.agent.nodes.ood_gate import ood_gate_node
@@ -322,6 +420,7 @@ def build_graph(
         builder.add_node("router", router_node)
         builder.add_node("ood_gate", ood_gate_node)
         builder.add_node("not_in_corpus", not_in_corpus_node)
+        builder.add_node("citation_repair", citation_repair_node)
 
         builder.add_edge(START, "fast_path")
         builder.add_conditional_edges(
@@ -339,9 +438,10 @@ def build_graph(
         builder.add_edge("generator", "citation_validator")
         builder.add_conditional_edges(
             "citation_validator",
-            route_after_citation_validator_once,
-            [END, "low_confidence"],
+            route_after_production_citation_validator,
+            [END, "citation_repair", "low_confidence"],
         )
+        builder.add_edge("citation_repair", "citation_validator")
         builder.add_edge("not_in_corpus", END)
         builder.add_edge("low_confidence", END)
         return builder.compile()

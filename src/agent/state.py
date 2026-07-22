@@ -34,7 +34,7 @@ class AgentState(TypedDict, total=False):
     # --- retrieval ---
     retrieved: list[
         RetrievedChunk
-    ]  # post-rerank, ~8 candidates, deduped across sub-queries
+    ]  # base ranking plus bounded doctrine hints and siblings
     ood: bool  # out-of-domain gate tripped -> "not in corpus"
 
     # --- grading ---
@@ -48,7 +48,7 @@ class AgentState(TypedDict, total=False):
     citation_valid: bool  # deterministic validator verdict
     faithful: bool  # LLM hallucination-checker verdict
     invalid_citations: list[str]  # sections cited but not in retrieved set
-    iteration: int  # re-retrieval/regeneration count (budget = 2)
+    iteration: int  # bounded rewrite or production-repair count
     confidence: Literal["high", "low"]  # "low" when loop budget exhausted
 
     # --- observability ---

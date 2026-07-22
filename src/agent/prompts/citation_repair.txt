@@ -1,0 +1,14 @@
+The previous structured answer failed deterministic citation validation.
+
+Rejected citations: {invalid_citations}
+Previous answer: {previous_answer}
+
+Repair it once using the same retrieved sections above.
+- Remove every rejected section and every claim that depends on it.
+- Keep useful claims that are directly supported by the retrieved text.
+- Do not introduce a new section, offence, punishment, or hypothetical branch.
+- Answer the central question first. If the remaining text is incomplete, say so.
+- Return a complete answer under 180 words with no unfinished sentence.
+
+Produce a fresh LegalAdvice object with a corrected answer, citations, and
+offences_identified list.

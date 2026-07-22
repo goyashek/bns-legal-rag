@@ -1,6 +1,6 @@
-"""Answer generator. Pydantic-constrained cited advice via DeepSeek Pro.
+"""Answer generator. Pydantic-constrained cited advice via the hard tier.
 
-Builds the LegalAdvice output from the graded chunks through `get_client("pro")`.
+Builds the LegalAdvice output from the graded chunks through `get_client("hard")`.
 
 instructor returns citations as structured (act, section_id) pairs the
 deterministic citation validator (Fri) checks exactly. The prompt forbids citing
@@ -11,6 +11,7 @@ quota.
 
 from __future__ import annotations
 
+from src.agent.legal_status import current_law_note
 from src.agent.llm import get_client, load_prompt
 from src.agent.state import AgentState
 from src.models.schemas import LegalAdvice
@@ -27,14 +28,19 @@ def _format_context(chunks: list[RetrievedChunk]) -> str:
     blocks: list[str] = []
     for c in chunks:
         ch = c.chunk
-        blocks.append(
-            f"[{ch.act} Section {ch.section_id}] {ch.heading}\n{ch.text[:4000]}"
-        )
+        note = current_law_note(ch.act, ch.section_id)
+        block = f"[{ch.act} Section {ch.section_id}] {ch.heading}\n{ch.text[:4000]}"
+        blocks.append(f"{block}\n{note}" if note else block)
     return "\n\n".join(blocks)
 
 
 def generate_answer(
-    query: str, chunks: list[RetrievedChunk], *, client: object | None = None
+    query: str,
+    chunks: list[RetrievedChunk],
+    *,
+    previous_answer: LegalAdvice | None = None,
+    invalid_citations: list[str] | None = None,
+    client: object | None = None,
 ) -> LegalAdvice:
     """Generate structured LegalAdvice grounded in `chunks`.
 
@@ -44,10 +50,17 @@ def generate_answer(
     returns). `query` and `in_corpus` are set deterministically after generation
     so the model can't drift them.
     """
-    client = client or get_client("pro")
+    client = client or get_client("hard")
     prompt = load_prompt("generator").format(
         query=query, context=_format_context(chunks)
     )
+    if previous_answer is not None:
+        prompt += "\n\n" + load_prompt("citation_repair").format(
+            invalid_citations=", ".join(invalid_citations or []) or "unspecified",
+            previous_answer=previous_answer.model_dump_json(
+                include={"answer", "citations", "offences_identified"}
+            ),
+        )
     advice: LegalAdvice = client.create(  # type: ignore[attr-defined]
         messages=[{"role": "user", "content": prompt}],
         response_model=LegalAdvice,
@@ -73,4 +86,32 @@ def generator_node(state: AgentState, *, client: object | None = None) -> AgentS
     return {
         "answer": answer,
         "trace_notes": [*notes, f"generator: {len(answer.citations)} citations"],
+    }
+
+
+def citation_repair_node(
+    state: AgentState, *, client: object | None = None
+) -> AgentState:
+    """Repair one citation-invalid draft without changing its retrieved context."""
+    previous = state.get("answer")
+    notes = state.get("trace_notes", [])
+    iteration = state.get("iteration", 0) + 1
+    if previous is None:
+        return {
+            "iteration": iteration,
+            "trace_notes": [*notes, "citation_repair: skipped missing draft"],
+        }
+
+    chunks = state.get("relevant_chunks") or state.get("retrieved", [])
+    answer = generate_answer(
+        state["query"],
+        chunks,
+        previous_answer=previous,
+        invalid_citations=state.get("invalid_citations", []),
+        client=client,
+    )
+    return {
+        "answer": answer,
+        "iteration": iteration,
+        "trace_notes": [*notes, f"citation_repair: {len(answer.citations)} citations"],
     }

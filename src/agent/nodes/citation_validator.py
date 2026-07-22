@@ -3,9 +3,9 @@
 The LLM hallucination checker (checker.py) still runs, but this sits in front of it
 and is pure code, basically free on cost and latency:
 
-  parse every [Section X, Act] the generator cited, check each one actually exists
-  in the retrieved chunk set. If the answer cites BNS 307 but only 306 was retrieved,
-  that citation is made up, so reject and go back to the rewriter.
+  parse the structured citations and every section named in the answer, then check
+  them against each other and the retrieved chunk set. If the answer cites BNS 307
+  but only 306 was retrieved, reject it and go back to the rewriter.
 
 This catches a confident citation to a section that was never retrieved. I'd rather
 do it deterministically than trust another LLM call.
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 
+from src.agent.legal_status import is_uncommenced
 from src.agent.state import AgentState
 from src.models.schemas import LegalAdvice
 from src.retrieval.hybrid import RetrievedChunk
@@ -28,6 +29,19 @@ from src.retrieval.hybrid import RetrievedChunk
 # Keep "103" and "63A", drop the "(1)"/"(2)" subsection tail. Matches
 # fast_path.detect_exact_section's normalization so the two agree.
 _SECTION_RE = re.compile(r"\d+[A-Z]?")
+_PROSE_SECTION_ID = r"\d+[A-Z]?(?:\(\d+\))?"
+_PROSE_SECTION_LIST = (
+    rf"{_PROSE_SECTION_ID}(?:\s*(?:,|and|or|/|&)\s*{_PROSE_SECTION_ID})*"
+)
+_PROSE_SECTION_ID_RE = re.compile(_PROSE_SECTION_ID)
+_EXPLICIT_PROSE_SECTION_RE = re.compile(
+    rf"\b(BNS|BNSS|BSA)\s+(?:Sections?\s+)?({_PROSE_SECTION_LIST})",
+    re.IGNORECASE,
+)
+_PROSE_SECTION_RE = re.compile(
+    rf"\bSections?\s+({_PROSE_SECTION_LIST})",
+    re.IGNORECASE,
+)
 
 
 def normalize_section(section_id: str) -> str:
@@ -37,34 +51,69 @@ def normalize_section(section_id: str) -> str:
 
 
 def extract_cited_sections(answer: LegalAdvice) -> list[tuple[str, str]]:
-    """Pull every (act, section_id) the answer cites.
+    """Pull every structured (act, section_id) citation.
 
-    Reads the structured `citations` field on LegalAdvice directly, no regex over the
-    prose, since generation is Pydantic-constrained and citations come out structured.
     Act is upper-cased so the membership check is case-insensitive on the act code.
     """
     return [(c.act.strip().upper(), c.section_id.strip()) for c in answer.citations]
+
+
+def extract_prose_sections(answer: LegalAdvice) -> list[tuple[str | None, str]]:
+    """Pull explicit and unqualified statutory section mentions from the answer."""
+    explicit = [
+        (act.upper(), section)
+        for act, section_list in _EXPLICIT_PROSE_SECTION_RE.findall(answer.answer)
+        for section in _PROSE_SECTION_ID_RE.findall(section_list)
+    ]
+    prose_without_explicit = _EXPLICIT_PROSE_SECTION_RE.sub("", answer.answer)
+    unqualified = [
+        (None, section)
+        for section_list in _PROSE_SECTION_RE.findall(prose_without_explicit)
+        for section in _PROSE_SECTION_ID_RE.findall(section_list)
+    ]
+    return list(dict.fromkeys([*explicit, *unqualified]))
 
 
 def validate_citations(
     answer: LegalAdvice,
     retrieved: list[RetrievedChunk],
 ) -> tuple[bool, list[str]]:
-    """Check every cited (act, section_id) exists in the retrieved set.
+    """Check structured citations and prose section mentions against retrieval.
 
     Returns (all_valid, invalid_citations), where invalid_citations lists the
     "ACT SECTION" strings that were cited but not retrieved. Both sides are
     normalized to section level first, so citing "318(2)" is valid when section
-    "318" was retrieved. This is the deterministic core, so worth testing hard.
+    "318" was retrieved. A section named only in prose is rejected because downstream
+    checks use the structured citation list to select supporting text.
     """
     retrieved_keys = {
         (c.chunk.act.strip().upper(), normalize_section(c.chunk.section_id))
         for c in retrieved
     }
+    structured = extract_cited_sections(answer)
+    structured_keys = {(act, normalize_section(section)) for act, section in structured}
+    structured_sections = {section for _, section in structured_keys}
     invalid: list[str] = []
-    for act, section_id in extract_cited_sections(answer):
+    for act, section_id in structured:
         if (act, normalize_section(section_id)) not in retrieved_keys:
             invalid.append(f"{act} {section_id}")
+        if is_uncommenced(act, section_id):
+            invalid.append(f"{act} {section_id} (not in force)")
+    for act, section_id in extract_prose_sections(answer):
+        section = normalize_section(section_id)
+        if act is not None and (act, section) not in structured_keys:
+            invalid.append(f"{act} {section_id}")
+        elif act is None and section not in structured_sections:
+            invalid.append(f"SECTION {section_id}")
+        if act is not None and is_uncommenced(act, section_id):
+            invalid.append(f"{act} {section_id} (not in force)")
+        elif act is None:
+            for structured_act, structured_section in structured:
+                if normalize_section(structured_section) == section and is_uncommenced(
+                    structured_act, section_id
+                ):
+                    invalid.append(f"{structured_act} {section_id} (not in force)")
+    invalid = list(dict.fromkeys(invalid))
     return (not invalid, invalid)
 
 
