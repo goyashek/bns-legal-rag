@@ -53,14 +53,9 @@ QDRANT_COLLECTION = "legal"
 # ponytail: these cheap hints cover the audited doctrine gaps; replace them with a
 # learned router only if a broader evaluation shows the small table has hit its ceiling.
 _LEGAL_HINT_PATTERNS = (
+    (re.compile(r"\b(plan(?:ned|ning)?|agree(?:d|ment)?)\b", re.I), "criminal conspiracy"),
     (
-        re.compile(r"\b(plan(?:ned|ning)?|agree(?:d|ment)?)\b", re.I),
-        "criminal conspiracy",
-    ),
-    (
-        re.compile(
-            r"\b(smash(?:ed|ing)?|damag(?:e|ed|ing)|destroy(?:ed|ing)?)\b", re.I
-        ),
+        re.compile(r"\b(smash(?:ed|ing)?|damag(?:e|ed|ing)|destroy(?:ed|ing)?)\b", re.I),
         "mischief damage to property",
     ),
     (
@@ -71,9 +66,7 @@ _LEGAL_HINT_PATTERNS = (
         "punishment for bribery",
     ),
     (
-        re.compile(
-            r"(?=.*\b(kill\w*|death|died)\b)(?=.*\b(sudden fight|provok\w*)\b)", re.I
-        ),
+        re.compile(r"(?=.*\b(kill\w*|death|died)\b)(?=.*\b(sudden fight|provok\w*)\b)", re.I),
         "culpable homicide punishment",
     ),
     (
@@ -391,9 +384,7 @@ def build_graph(
     the earlier experiment.
     """
     if pipeline not in {"production", "baseline", "grader", "checker", "full"}:
-        raise ValueError(
-            "pipeline must be production, baseline, grader, checker, or full"
-        )
+        raise ValueError("pipeline must be production, baseline, grader, checker, or full")
     from src.agent.nodes.checker import checker_node
     from src.agent.nodes.citation_validator import citation_validator_node
     from src.agent.nodes.fast_path import fast_path_node
@@ -407,9 +398,7 @@ def build_graph(
     builder = StateGraph(AgentState)
     builder.add_node(
         "retrieve",
-        lambda state: retrieve_node(
-            state, mode=retrieval_mode, use_reranker=use_reranker
-        ),
+        lambda state: retrieve_node(state, mode=retrieval_mode, use_reranker=use_reranker),
     )
     builder.add_node("generator", generator_node)
     builder.add_node("citation_validator", citation_validator_node)
@@ -423,17 +412,11 @@ def build_graph(
         builder.add_node("citation_repair", citation_repair_node)
 
         builder.add_edge(START, "fast_path")
-        builder.add_conditional_edges(
-            "fast_path", route_after_fast_path, ["router", END]
-        )
-        builder.add_conditional_edges(
-            "router", route_after_router_to_retrieve, ["retrieve", END]
-        )
+        builder.add_conditional_edges("fast_path", route_after_fast_path, ["router", END])
+        builder.add_conditional_edges("router", route_after_router_to_retrieve, ["retrieve", END])
         builder.add_edge("retrieve", "ood_gate")
         builder.add_conditional_edges(
-            "ood_gate",
-            route_after_ood_gate_to_generator,
-            ["not_in_corpus", "generator"],
+            "ood_gate", route_after_ood_gate_to_generator, ["not_in_corpus", "generator"]
         )
         builder.add_edge("generator", "citation_validator")
         builder.add_conditional_edges(
@@ -469,9 +452,7 @@ def build_graph(
             )
         else:
             builder.add_conditional_edges(
-                "citation_validator",
-                route_after_citation_validator_once,
-                [END, "low_confidence"],
+                "citation_validator", route_after_citation_validator_once, [END, "low_confidence"]
             )
         builder.add_edge("low_confidence", END)
         return builder.compile()
@@ -487,20 +468,14 @@ def build_graph(
 
     builder.add_edge(START, "fast_path")
     builder.add_conditional_edges("fast_path", route_after_fast_path, ["router", END])
-    builder.add_conditional_edges(
-        "router", route_after_router, ["intent_expander", END]
-    )
+    builder.add_conditional_edges("router", route_after_router, ["intent_expander", END])
     builder.add_edge("intent_expander", "retrieve")
     builder.add_edge("retrieve", "ood_gate")
-    builder.add_conditional_edges(
-        "ood_gate", route_after_ood_gate, ["not_in_corpus", "grader"]
-    )
+    builder.add_conditional_edges("ood_gate", route_after_ood_gate, ["not_in_corpus", "grader"])
     builder.add_conditional_edges(
         "grader", route_after_grader, ["generator", "rewriter", "low_confidence"]
     )
-    builder.add_edge(
-        "rewriter", "retrieve"
-    )  # loop back: re-retrieve on the rewritten query
+    builder.add_edge("rewriter", "retrieve")  # loop back: re-retrieve on the rewritten query
     builder.add_edge("generator", "citation_validator")
     builder.add_conditional_edges(
         "citation_validator",
@@ -537,7 +512,5 @@ def answer_query(
             pipeline=pipeline,
         ).invoke({"query": query, "trace_notes": [], "iteration": 0})
     if _GRAPH is None:
-        _GRAPH = build_graph(
-            retrieval_mode="dense", use_reranker=False, pipeline="production"
-        )
+        _GRAPH = build_graph(retrieval_mode="dense", use_reranker=False, pipeline="production")
     return _GRAPH.invoke({"query": query, "trace_notes": [], "iteration": 0})

@@ -90,8 +90,5 @@ def rewriter_node(state: AgentState, *, client: object | None = None) -> AgentSt
     return {
         "sub_queries": [new_query],
         "iteration": iteration,
-        "trace_notes": [
-            *notes,
-            f"rewriter[{reason}] iter={iteration}: {new_query[:60]!r}",
-        ],
+        "trace_notes": [*notes, f"rewriter[{reason}] iter={iteration}: {new_query[:60]!r}"],
     }

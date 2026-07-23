@@ -71,9 +71,7 @@ def _resolve_key(tier: Tier = "easy") -> str:
 
 def has_api_key(tier: Tier = "easy") -> bool:
     """True when a tier-specific, shared, or legacy key is configured."""
-    return bool(
-        _first_env(f"LLM_{tier.upper()}_API_KEY", "LLM_API_KEY", "DEEPSEEK_API_KEY")
-    )
+    return bool(_first_env(f"LLM_{tier.upper()}_API_KEY", "LLM_API_KEY", "DEEPSEEK_API_KEY"))
 
 
 def _model_for(tier: Tier) -> str:
@@ -177,9 +175,7 @@ def _judge_profile() -> ModelProfile:
         "DEEPSEEK_API_KEY",
     )
     if not key:
-        raise RuntimeError(
-            "RAGAS needs RAGAS_JUDGE_API_KEY, LLM_EASY_API_KEY, or LLM_API_KEY"
-        )
+        raise RuntimeError("RAGAS needs RAGAS_JUDGE_API_KEY, LLM_EASY_API_KEY, or LLM_API_KEY")
     max_tokens = int(
         _first_env(
             "RAGAS_JUDGE_MAX_TOKENS",

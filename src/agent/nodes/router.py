@@ -72,9 +72,7 @@ def router_node(state: AgentState, *, client: object | None = None) -> AgentStat
     if route in ("out_of_scope", "needs_clarification"):
         from src.models.schemas import LegalAdvice
 
-        reply = (
-            OUT_OF_SCOPE_REPLY if route == "out_of_scope" else NEEDS_CLARIFICATION_REPLY
-        )
+        reply = OUT_OF_SCOPE_REPLY if route == "out_of_scope" else NEEDS_CLARIFICATION_REPLY
         update["answer"] = LegalAdvice(
             query=state["query"],
             answer=reply,

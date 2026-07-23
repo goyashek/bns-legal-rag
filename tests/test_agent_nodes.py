@@ -10,33 +10,28 @@ once that node exists.
 
 from __future__ import annotations
 
-import pytest
-
-from src.agent.llm import has_api_key
-from src.agent.nodes import grader as grader_module
-from src.agent.nodes.checker import (
-    FaithfulnessVerdict,
-    check_faithfulness,
-    checker_node,
-)
+from src.agent.nodes.checker import FaithfulnessVerdict, check_faithfulness
 from src.agent.nodes.citation_validator import (
     citation_validator_node,
-    extract_cited_sections,
-    normalize_section,
+    extract_prose_sections,
     validate_citations,
 )
-from src.agent.nodes.fast_path import detect_exact_section, lookup_section
-from src.agent.nodes.generator import generate_answer, generator_node
-from src.agent.nodes.grader import GradeVerdict, grade_chunks, grader_node
+from src.agent.nodes.fast_path import (
+    build_fast_path_answer,
+    detect_exact_section,
+    lookup_section_chunks,
+)
+from src.agent.nodes.generator import (
+    _format_context,
+    generate_answer,
+)
+from src.agent.nodes.grader import GradeVerdict, grade_chunks
 from src.agent.nodes.intent_expander import (
     SubQueries,
-    _dedupe,
-    expand_intent,
-    intent_expander_node,
 )
 from src.agent.nodes.ood_gate import is_out_of_domain
-from src.agent.nodes.rewriter import RewrittenQuery, rewrite_query, rewriter_node
-from src.agent.nodes.router import RouteDecision, classify, router_node
+from src.agent.nodes.rewriter import RewrittenQuery
+from src.agent.nodes.router import RouteDecision, router_node
 from src.ingest.chunk_chonkie import LegalChunk
 from src.models.schemas import Citation, LegalAdvice
 from src.retrieval.hybrid import RetrievedChunk
@@ -54,9 +49,7 @@ class _FakeClient:
         self.calls: list[dict] = []
 
     def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
-        self.calls.append(
-            {"messages": messages, "response_model": response_model, **kwargs}
-        )
+        self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
         assert response_model is RouteDecision
         return RouteDecision(route=self._route)
 
@@ -69,9 +62,7 @@ class _FakeExpanderClient:
         self.calls: list[dict] = []
 
     def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
-        self.calls.append(
-            {"messages": messages, "response_model": response_model, **kwargs}
-        )
+        self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
         assert response_model is SubQueries
         return SubQueries(sub_queries=self._subs)
 
@@ -113,9 +104,7 @@ class _FakeRewriterClient:
         self.calls: list[dict] = []
 
     def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
-        self.calls.append(
-            {"messages": messages, "response_model": response_model, **kwargs}
-        )
+        self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
         assert response_model is RewrittenQuery
         return RewrittenQuery(query=self._rewritten)
 
@@ -128,9 +117,7 @@ class _FakeGeneratorClient:
         self.calls: list[dict] = []
 
     def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
-        self.calls.append(
-            {"messages": messages, "response_model": response_model, **kwargs}
-        )
+        self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
         assert response_model is LegalAdvice
         return self._advice.model_copy(deep=True)
 
@@ -143,9 +130,7 @@ class _FakeCheckerClient:
         self.calls: list[dict] = []
 
     def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
-        self.calls.append(
-            {"messages": messages, "response_model": response_model, **kwargs}
-        )
+        self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
         assert response_model is FaithfulnessVerdict
         return FaithfulnessVerdict(faithful=self._faithful)
 
@@ -165,12 +150,43 @@ class TestExactSectionDetection:
 
     def test_normalizes_ipc_reference(self) -> None:
         """'302 IPC' should resolve to its BNS equivalent (103) via the mapping."""
-        assert detect_exact_section(
-            "explain section 302 IPC", ipc_bns_mapping=IPC_MAP
-        ) == (
+        assert detect_exact_section("explain section 302 IPC", ipc_bns_mapping=IPC_MAP) == (
             "BNS",
             "103",
         )
+
+
+class TestLookupSection:
+    def test_fast_path_reassembles_all_section_chunks(self) -> None:
+        chunks = [
+            LegalChunk("BNS::303::1", "BNS", "303", "Theft", "Heading\n\nsecond", "Heading"),
+            LegalChunk("BNS::303::0", "BNS", "303", "Theft", "Heading\n\nfirst", "Heading"),
+        ]
+        section_chunks = lookup_section_chunks("BNS", "303", chunks)
+        answer = build_fast_path_answer("BNS 303", section_chunks)
+
+        assert answer.answer.endswith("first second")
+        assert answer.citations[0].section_id == "303"
+
+    def test_fast_path_surfaces_enriched_classification(self) -> None:
+        # cognizable/bailable/category are already on the chunk (enrich_metadata);
+        # the deterministic answer should report them, no LLM.
+        chunk = LegalChunk(
+            "BNS::103::0",
+            "BNS",
+            "103",
+            "Punishment for murder",
+            "body",
+            metadata={
+                "cognizable": True,
+                "bailable": False,
+                "offence_category": "Of Offences Affecting The Human Body",
+            },
+        )
+        answer = build_fast_path_answer("BNS 103", [chunk])
+        assert "cognizable" in answer.answer
+        assert "non-bailable" in answer.answer
+        assert "Of Offences Affecting The Human Body" in answer.answer
 
 
 class TestOutOfDomainGate:
@@ -187,9 +203,7 @@ class TestRouterUnit:
     """Node logic against a fake client — no key, no quota."""
 
     def test_out_of_scope_gets_canned_low_confidence_answer(self) -> None:
-        out = router_node(
-            {"query": "how do I file taxes"}, client=_FakeClient("out_of_scope")
-        )
+        out = router_node({"query": "how do I file taxes"}, client=_FakeClient("out_of_scope"))
         assert out["route"] == "out_of_scope"
         assert out["answer"].confidence == "low"
         assert out["answer"].in_corpus is False
@@ -197,9 +211,7 @@ class TestRouterUnit:
 
 def _chunk(section_id: str) -> RetrievedChunk:
     """A RetrievedChunk for a given BNS section (for grader fan-out tests)."""
-    c = LegalChunk(
-        f"BNS::{section_id}::0", "BNS", section_id, f"Heading {section_id}", "body text"
-    )
+    c = LegalChunk(f"BNS::{section_id}::0", "BNS", section_id, f"Heading {section_id}", "body text")
     return RetrievedChunk(chunk=c, rrf_score=0.5)
 
 
@@ -214,9 +226,50 @@ class TestGraderUnit:
         assert fake.n_calls == 3  # one call per chunk (the fan-out)
 
 
-def _advice(
-    citations: list[tuple[str, str]], answer: str = "some legal answer"
-) -> LegalAdvice:
+class TestGeneratorUnit:
+    """Cited-advice assembly against a fake client — no key, no quota."""
+
+    def _canned(self) -> LegalAdvice:
+        return LegalAdvice(
+            query="(model may set this)",
+            answer="Murder is punished under BNS 103.",
+            citations=[Citation(act="BNS", section_id="103", heading="Punishment for murder")],
+            offences_identified=["murder"],
+            in_corpus=False,  # generator must overwrite this to True
+        )
+
+    def test_punishment_instruction_preserves_bounds_and_fine(self) -> None:
+        fake = _FakeGeneratorClient(self._canned())
+        wallet = _chunk("314")
+        wallet.chunk.text = (
+            "shall not be less than six months but may extend to two years and with fine"
+        )
+        generate_answer("I kept a lost wallet", [wallet], client=fake)
+        content = fake.calls[0]["messages"][0]["content"]
+        assert "not be less than six months" in content
+        assert "fine is mandatory or optional" in content
+        assert "exactly from the cited text" in content
+
+    def test_citation_repair_omits_rejected_subsection_body(self) -> None:
+        chunk = LegalChunk(
+            "BNS::106::0",
+            "BNS",
+            "106",
+            "Causing death by negligence",
+            "(1) Five years for causing death by negligence.\n"
+            "(2) Ten years after fleeing without reporting.",
+        )
+        context = _format_context(
+            [RetrievedChunk(chunk=chunk, rrf_score=0.5)],
+            invalid_citations=["BNS 106(2) (not in force)"],
+        )
+
+        assert "Five years" in context
+        assert "Ten years" not in context
+        assert "Rejected subsection omitted" in context
+
+
+def _advice(citations: list[tuple[str, str]], answer: str = "some legal answer") -> LegalAdvice:
     """A LegalAdvice citing the given (act, section_id) pairs."""
     return LegalAdvice(
         query="q",
@@ -228,6 +281,24 @@ def _advice(
 class TestCitationValidator:
     """The headline piece: pure-code check that every cited section was retrieved."""
 
+    def test_prose_only_sections_are_rejected(self) -> None:
+        adv = _advice(
+            [("BNS", "336"), ("BNS", "89")],
+            answer="BNS Sections 336 and 338 apply. Sections 89 and 85 may also apply.",
+        )
+        assert extract_prose_sections(adv) == [
+            ("BNS", "336"),
+            ("BNS", "338"),
+            (None, "89"),
+            (None, "85"),
+        ]
+        valid, invalid = validate_citations(
+            adv,
+            [_chunk("336"), _chunk("338"), _chunk("89"), _chunk("85")],
+        )
+        assert valid is False
+        assert invalid == ["BNS 338", "SECTION 85"]
+
     def test_fabricated_citation_is_rejected(self) -> None:
         # THE demo: answer cites BNS 307 but only 306 was retrieved -> caught.
         adv = _advice([("BNS", "306"), ("BNS", "307")])
@@ -236,14 +307,33 @@ class TestCitationValidator:
         assert valid is False
         assert invalid == ["BNS 307"]
 
+    def test_uncommenced_subsection_is_rejected(self) -> None:
+        adv = _advice(
+            [("BNS", "106")],
+            answer="BNS Section 106(1) applies, but Section 106(2) increases the punishment.",
+        )
+        valid, invalid = validate_citations(adv, [_chunk("106")])
+        assert valid is False
+        assert invalid == ["BNS 106(2) (not in force)"]
+
+    def test_node_rejects_section_excluded_from_generation_context(self) -> None:
+        adv = _advice([("BNS", "999")])
+        out = citation_validator_node(
+            {
+                "answer": adv,
+                "relevant_chunks": [_chunk("103")],
+                "retrieved": [_chunk("103"), _chunk("999")],
+            }
+        )
+        assert out["citation_valid"] is False
+        assert out["invalid_citations"] == ["BNS 999"]
+
 
 class TestCheckerUnit:
     """Faithfulness pass against a fake client — no key, no quota."""
 
     def test_unfaithful_verdict(self) -> None:
-        adv = _advice(
-            [("BNS", "103")], answer="Murder carries a mandatory death sentence."
-        )
+        adv = _advice([("BNS", "103")], answer="Murder carries a mandatory death sentence.")
         fake = _FakeCheckerClient(faithful=False)
         faithful, unsupported = check_faithfulness(adv, [_chunk("103")], client=fake)
         assert faithful is False

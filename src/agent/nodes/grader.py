@@ -48,15 +48,11 @@ def _grade_prompt(query: str, chunk: RetrievedChunk) -> str:
         act=c.act,
         section_id=c.section_id,
         heading=c.heading,
-        text=c.text[
-            :4000
-        ],  # cap: statutory bodies can be long; the head carries the offence
+        text=c.text[:4000],  # cap: statutory bodies can be long; the head carries the offence
     )
 
 
-async def _agrade_one(
-    query: str, chunk: RetrievedChunk, client, sem: asyncio.Semaphore
-) -> bool:
+async def _agrade_one(query: str, chunk: RetrievedChunk, client, sem: asyncio.Semaphore) -> bool:
     async with sem:
         verdict: GradeVerdict = await client.create(
             messages=[{"role": "user", "content": _grade_prompt(query, chunk)}],
@@ -71,9 +67,7 @@ async def _agrade_chunks(
 ) -> list[bool]:
     sem = asyncio.Semaphore(_MAX_CONCURRENCY)
     try:
-        return await asyncio.gather(
-            *(_agrade_one(query, c, client, sem) for c in chunks)
-        )
+        return await asyncio.gather(*(_agrade_one(query, c, client, sem) for c in chunks))
     finally:
         if close_client:
             await client.aclose()
@@ -96,9 +90,7 @@ def grade_chunks(
     if close_client:
         tier = os.getenv("GRADER_TIER", "easy").strip().lower()
         client = get_client("hard" if tier == "hard" else "easy", async_client=True)
-    verdicts = asyncio.run(
-        _agrade_chunks(query, chunks, client, close_client=close_client)
-    )
+    verdicts = asyncio.run(_agrade_chunks(query, chunks, client, close_client=close_client))
     return [c for c, keep in zip(chunks, verdicts, strict=True) if keep]
 
 

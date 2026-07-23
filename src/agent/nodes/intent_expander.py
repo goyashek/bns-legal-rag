@@ -52,9 +52,7 @@ def expand_intent(
     original query if the model returns nothing usable.
     """
     client = client or get_client("easy")
-    prompt = load_prompt("intent_expander").format(
-        query=query, max_sub_queries=max_sub_queries
-    )
+    prompt = load_prompt("intent_expander").format(query=query, max_sub_queries=max_sub_queries)
     result: SubQueries = client.create(  # type: ignore[attr-defined]
         messages=[{"role": "user", "content": prompt}],
         response_model=SubQueries,
@@ -64,9 +62,7 @@ def expand_intent(
     return subs or [query]
 
 
-def intent_expander_node(
-    state: AgentState, *, client: object | None = None
-) -> AgentState:
+def intent_expander_node(state: AgentState, *, client: object | None = None) -> AgentState:
     """LangGraph node. Sets sub_queries. Downstream retrieval fans out over these."""
     subs = expand_intent(state["query"], client=client)
     notes = state.get("trace_notes", [])

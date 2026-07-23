@@ -17,9 +17,6 @@ def is_uncommenced(act: str, section_id: str) -> bool:
 
 def current_law_note(act: str, section_id: str) -> str | None:
     """Return a generation note for sections with a known commencement exception."""
-    if (act.strip().upper(), section_id.split("(", 1)[0].strip().upper()) == (
-        "BNS",
-        "106",
-    ):
+    if (act.strip().upper(), section_id.split("(", 1)[0].strip().upper()) == ("BNS", "106"):
         return "CURRENT-LAW NOTE: BNS 106(2) has not commenced. Do not present it as law in force."
     return None

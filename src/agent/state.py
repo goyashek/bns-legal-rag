@@ -32,9 +32,7 @@ class AgentState(TypedDict, total=False):
     sub_queries: list[str]  # 1 narrative -> 3-5 parallel offence sub-queries
 
     # --- retrieval ---
-    retrieved: list[
-        RetrievedChunk
-    ]  # base ranking plus bounded doctrine hints and siblings
+    retrieved: list[RetrievedChunk]  # base ranking plus bounded doctrine hints and siblings
     ood: bool  # out-of-domain gate tripped -> "not in corpus"
 
     # --- grading ---

@@ -25,9 +25,7 @@ from src.retrieval.hybrid import RetrievedChunk
 class FaithfulnessVerdict(BaseModel):
     """Structured faithfulness verdict. `instructor` forces the model to fill this."""
 
-    faithful: bool = Field(
-        description="True only if every claim is backed by the cited text"
-    )
+    faithful: bool = Field(description="True only if every claim is backed by the cited text")
 
 
 def _cited_context(answer: LegalAdvice, chunks: list[RetrievedChunk]) -> str:
@@ -39,9 +37,7 @@ def _cited_context(answer: LegalAdvice, chunks: list[RetrievedChunk]) -> str:
     """
     cited = {(c.act.strip().upper(), c.section_id.strip()) for c in answer.citations}
     picked = [
-        c
-        for c in chunks
-        if (c.chunk.act.strip().upper(), c.chunk.section_id.strip()) in cited
+        c for c in chunks if (c.chunk.act.strip().upper(), c.chunk.section_id.strip()) in cited
     ]
     use = picked or chunks
     return "\n\n".join(
@@ -82,9 +78,7 @@ def checker_node(state: AgentState, *, client: object | None = None) -> AgentSta
     # contain a section that supports a claim but was filtered out before prompting
     # the generator.
     generation_context = state.get("relevant_chunks") or state.get("retrieved", [])
-    faithful, unsupported = check_faithfulness(
-        answer, generation_context, client=client
-    )
+    faithful, unsupported = check_faithfulness(answer, generation_context, client=client)
     notes = state.get("trace_notes", [])
     return {
         "faithful": faithful,

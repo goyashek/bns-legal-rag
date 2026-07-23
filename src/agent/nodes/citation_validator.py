@@ -30,9 +30,7 @@ from src.retrieval.hybrid import RetrievedChunk
 # fast_path.detect_exact_section's normalization so the two agree.
 _SECTION_RE = re.compile(r"\d+[A-Z]?")
 _PROSE_SECTION_ID = r"\d+[A-Z]?(?:\(\d+\))?"
-_PROSE_SECTION_LIST = (
-    rf"{_PROSE_SECTION_ID}(?:\s*(?:,|and|or|/|&)\s*{_PROSE_SECTION_ID})*"
-)
+_PROSE_SECTION_LIST = rf"{_PROSE_SECTION_ID}(?:\s*(?:,|and|or|/|&)\s*{_PROSE_SECTION_ID})*"
 _PROSE_SECTION_ID_RE = re.compile(_PROSE_SECTION_ID)
 _EXPLICIT_PROSE_SECTION_RE = re.compile(
     rf"\b(BNS|BNSS|BSA)\s+(?:Sections?\s+)?({_PROSE_SECTION_LIST})",
@@ -87,8 +85,7 @@ def validate_citations(
     checks use the structured citation list to select supporting text.
     """
     retrieved_keys = {
-        (c.chunk.act.strip().upper(), normalize_section(c.chunk.section_id))
-        for c in retrieved
+        (c.chunk.act.strip().upper(), normalize_section(c.chunk.section_id)) for c in retrieved
     }
     structured = extract_cited_sections(answer)
     structured_keys = {(act, normalize_section(section)) for act, section in structured}

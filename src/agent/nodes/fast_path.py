@@ -88,9 +88,7 @@ def detect_exact_section(
     return None
 
 
-def lookup_section(
-    act: str, section_id: str, chunks: list[LegalChunk]
-) -> LegalChunk | None:
+def lookup_section(act: str, section_id: str, chunks: list[LegalChunk]) -> LegalChunk | None:
     """Return the first chunk for (act, section_id), or None if not in the corpus."""
     return next(
         (c for c in chunks if c.act == act and c.section_id == section_id),
@@ -98,9 +96,7 @@ def lookup_section(
     )
 
 
-def lookup_section_chunks(
-    act: str, section_id: str, chunks: list[LegalChunk]
-) -> list[LegalChunk]:
+def lookup_section_chunks(act: str, section_id: str, chunks: list[LegalChunk]) -> list[LegalChunk]:
     """Return every ordered chunk belonging to an exact statutory section."""
     return sorted(
         (c for c in chunks if c.act == act and c.section_id == section_id),
@@ -135,9 +131,7 @@ def _classification_line(chunk: LegalChunk) -> str:
 def build_fast_path_answer(query: str, chunks: list[LegalChunk]) -> LegalAdvice:
     """Assemble a direct, complete-section answer without an LLM call."""
     first = chunks[0]
-    bodies = [
-        c.text.removeprefix(f"{c.summary}\n\n") if c.summary else c.text for c in chunks
-    ]
+    bodies = [c.text.removeprefix(f"{c.summary}\n\n") if c.summary else c.text for c in chunks]
     answer = f"{first.act} Section {first.section_id} — {first.heading}.\n\n{' '.join(bodies)}"
     classification = _classification_line(first)
     if classification:
@@ -145,9 +139,7 @@ def build_fast_path_answer(query: str, chunks: list[LegalChunk]) -> LegalAdvice:
     return LegalAdvice(
         query=query,
         answer=answer,
-        citations=[
-            Citation(act=first.act, section_id=first.section_id, heading=first.heading)
-        ],
+        citations=[Citation(act=first.act, section_id=first.section_id, heading=first.heading)],
         offences_identified=[first.heading],
         confidence="high",
         in_corpus=True,
@@ -170,9 +162,7 @@ def fast_path_node(state: AgentState) -> AgentState:
         if section_chunks:
             return {
                 "fast_path_hit": True,
-                "fast_path_answer": build_fast_path_answer(
-                    state["query"], section_chunks
-                ),
+                "fast_path_answer": build_fast_path_answer(state["query"], section_chunks),
                 "trace_notes": [*notes, f"fast_path: hit {hit[0]} {hit[1]}"],
             }
 
@@ -198,9 +188,7 @@ def _resolver() -> tuple[list[LegalChunk], dict[str, str]]:
         # metadata already carries the reverse mapping; fall back to the PDF only if empty
         if not mapping:
             try:
-                mapping = load_ipc_bns_mapping(
-                    "data/raw/COMPARISON SUMMARY BNS to IPC .pdf"
-                )
+                mapping = load_ipc_bns_mapping("data/raw/COMPARISON SUMMARY BNS to IPC .pdf")
             except Exception:
                 mapping = {}
         _CACHE = (chunks, mapping)
