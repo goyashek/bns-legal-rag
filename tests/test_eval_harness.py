@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from src.eval import mcq_eval, ragas_eval
+from src.eval import claim_audit, mcq_eval, ragas_eval
 
 
 # --- fakes -------------------------------------------------------------------
@@ -44,6 +44,64 @@ class _DetailedFakeAnswer(_FakeAnswer):
     citations = [_FakeCitation()]
     confidence = "high"
     in_corpus = True
+
+
+class _FakeClaimClient:
+    def create_with_completion(self, **kwargs):
+        if kwargs["response_model"] is claim_audit.ClaimExtraction:
+            findings = claim_audit.ClaimExtraction(
+                claims=[
+                    claim_audit.ExtractedClaim(
+                        claim="BNS 103 punishes murder.",
+                        answer_quote="BNS 103 punishes murder.",
+                    ),
+                    claim_audit.ExtractedClaim(
+                        claim="Bail is automatic.",
+                        answer_quote="Bail is automatic.",
+                    ),
+                ]
+            )
+            stage = "extractor/model"
+        else:
+            assert "[C1 | BNS Section 103: Murder] section text" in kwargs["messages"][0]["content"]
+            findings = claim_audit.ClaimVerdicts(
+                verdicts=[
+                    claim_audit.ClaimVerdict(
+                        claim_id="K1",
+                        supported=True,
+                        context_ids=["C1"],
+                        evidence_quote="punished with death or imprisonment for life",
+                        reason="C1 states the punishment.",
+                    ),
+                    claim_audit.ClaimVerdict(
+                        claim_id="K2",
+                        supported=False,
+                        failure_type="unsupported_procedure",
+                        reason="No retrieved context discusses bail.",
+                    ),
+                ]
+            )
+            stage = "verifier/model"
+        usage = type("Usage", (), {"prompt_tokens": 120, "completion_tokens": 40})()
+        completion = type("Completion", (), {"model": stage, "usage": usage})()
+        return findings, completion
+
+
+class _FailingSecondRowClient(_FakeClaimClient):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def create_with_completion(self, **kwargs):
+        self.calls += 1
+        if self.calls == 3:
+            raise RuntimeError("upstream failed")
+        return super().create_with_completion(**kwargs)
+
+
+class _FakeJudgeProfile:
+    model = "ragas-judge-dev"
+    max_tokens = 512
+    disable_thinking = True
 
 
 # =============================== RAGAS =======================================
@@ -106,6 +164,62 @@ class TestRagasWorkers:
         monkeypatch.setenv("RAGAS_MAX_WORKERS", "0")
         with pytest.raises(ValueError, match="must be positive"):
             ragas_eval._ragas_max_workers()
+
+
+class TestClaimAudit:
+    def test_saves_claim_evidence_provenance_and_code_score(self, tmp_path) -> None:
+        samples = tmp_path / "samples.jsonl"
+        audits = tmp_path / "audits.jsonl"
+        ragas_eval.write_samples(
+            [
+                {
+                    "scenario_id": "s01",
+                    "user_input": "What is the punishment for murder?",
+                    "response": "BNS 103 punishes murder. Bail is automatic.",
+                    "retrieved_contexts": ["section text"],
+                }
+            ],
+            samples,
+        )
+
+        summary = claim_audit.run_claim_audit(
+            samples,
+            audits,
+            client=_FakeClaimClient(),
+            profile=_FakeJudgeProfile(),
+            corpus=[_FakeChunk("BNS", "103", "section text", "Murder")],
+        )
+        row = json.loads(audits.read_text())
+
+        assert summary.support_ratio == 0.5
+        assert summary.valid_claims == 2 and summary.invalid_claims == 0
+        assert summary.failure_types == {"unsupported_procedure": 1}
+        assert [call["reported_model"] for call in row["judge_calls"]] == [
+            "extractor/model",
+            "verifier/model",
+        ]
+        assert row["input_tokens"] == 240
+        assert row["claims"][0]["context_ids"] == ["C1"]
+        assert row["claims"][0]["answer_quote"] == "BNS 103 punishes murder."
+
+    def test_excludes_self_contradictory_judge_verdict(self) -> None:
+        row = {
+            "claim_count": 1,
+            "supported_claims": 0,
+            "claims": [
+                {
+                    "supported": False,
+                    "failure_type": "wrong_punishment",
+                    "reason": "The wording matches the statute, so this is actually supported.",
+                }
+            ],
+        }
+
+        summary = claim_audit.summarize([row])
+
+        assert summary.valid_claims == 0
+        assert summary.invalid_claims == 1
+        assert summary.failure_types == {}
 
 
 # ============================ MCQ (BhashaBench) ==============================
