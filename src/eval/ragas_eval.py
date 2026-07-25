@@ -279,6 +279,44 @@ def aggregate(scored_rows: list[dict]) -> RagasScores:
     )
 
 
+def _build_metrics(names: tuple[str, ...], llm, embeddings) -> list:
+    """Select and bind only the RAGAS metric objects named in `names`.
+
+    Restricting the set is a cost lever. The noise-floor study only needs
+    faithfulness, and skipping the other three avoids the context metrics'
+    judge calls entirely. Only the requested metrics are bound to the pinned
+    judge, and the local answer-relevancy embeddings attach only when that
+    metric actually runs.
+    """
+    from ragas.metrics import (
+        answer_relevancy,
+        context_precision,
+        context_recall,
+        faithfulness,
+    )
+
+    registry = {
+        "faithfulness": faithfulness,
+        "answer_relevancy": answer_relevancy,
+        "context_precision": context_precision,
+        "context_recall": context_recall,
+    }
+    unknown = [n for n in names if n not in registry]
+    if unknown:
+        raise ValueError(f"unknown metric(s): {', '.join(unknown)}; valid: {', '.join(registry)}")
+
+    selected = []
+    for name in names:
+        metric = registry[name]
+        metric.llm = llm  # bind the configured judge; ragas otherwise defaults to OpenAI
+        selected.append(metric)
+    if answer_relevancy in selected:
+        answer_relevancy.embeddings = embeddings
+        # One generation keeps the judge compact; more self-consistency multiplies cost.
+        answer_relevancy.strictness = 1
+    return selected
+
+
 def run_ragas_eval(
     scenarios: list[dict] | None = None,
     *,
@@ -288,6 +326,7 @@ def run_ragas_eval(
     retrieval_mode: Literal["hybrid", "dense", "sparse"] = "hybrid",
     use_reranker: bool = True,
     pipeline: PipelineVariant = "full",
+    metrics: tuple[str, ...] = METRIC_NAMES,
     samples_in: str | Path | None = None,
     samples_out: str | Path | None = None,
     scores_out: str | Path | None = None,
@@ -323,19 +362,8 @@ def run_ragas_eval(
 
     llm, embeddings = _ragas_evaluator()
     from ragas import EvaluationDataset, RunConfig, evaluate
-    from ragas.metrics import (
-        answer_relevancy,
-        context_precision,
-        context_recall,
-        faithfulness,
-    )
 
-    # Bind the configured evaluator explicitly; ragas otherwise defaults to OpenAI.
-    for metric in (faithfulness, answer_relevancy, context_precision, context_recall):
-        metric.llm = llm
-    answer_relevancy.embeddings = embeddings
-    # One generation keeps the judge compact; more self-consistency samples multiply cost.
-    answer_relevancy.strictness = 1
+    selected_metrics = _build_metrics(metrics, llm, embeddings)
 
     dataset = EvaluationDataset.from_list(
         [
@@ -346,7 +374,7 @@ def run_ragas_eval(
     run_config = RunConfig(max_workers=_ragas_max_workers(), timeout=600)
     result = evaluate(
         dataset=dataset,
-        metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+        metrics=selected_metrics,
         llm=llm,
         embeddings=embeddings,
         run_config=run_config,
@@ -368,6 +396,75 @@ def run_ragas_eval(
     return scores
 
 
+@dataclass
+class NoiseFloorResult:
+    """Per-metric mean and sample std across repeated judge passes on one trace."""
+
+    samples_in: str
+    repeats: int
+    n_scenarios: int
+    metrics: dict[str, dict]
+
+
+def run_noise_floor(
+    samples_in: str | Path,
+    *,
+    repeats: int = 3,
+    metrics: tuple[str, ...] = ("faithfulness",),
+    pipeline: PipelineVariant = "production",
+    scores_out: str | Path | None = None,
+) -> NoiseFloorResult:
+    """Judge one saved answer trace `repeats` times and report metric variance.
+
+    Judge-only by construction: it always reads a saved trace via `samples_in`,
+    so no answer is regenerated and only the judge path varies between passes.
+    The result isolates evaluator noise from generator noise, which is the
+    whole point of the study. If the std is on the order of recent run-to-run
+    metric changes, those changes are inside the ruler's error bar.
+    """
+    import statistics
+
+    if repeats < 2:
+        raise ValueError("noise floor needs at least 2 repeats to estimate a std")
+
+    values: dict[str, list[float]] = {m: [] for m in metrics}
+    n_scenarios = 0
+    for _ in range(repeats):
+        scores = run_ragas_eval(
+            samples_in=samples_in,
+            metrics=tuple(metrics),
+            pipeline=pipeline,
+        )
+        n_scenarios = scores.n_scenarios
+        for m in metrics:
+            values[m].append(getattr(scores, m))
+
+    summary = {
+        m: {
+            "mean": statistics.fmean(vals),
+            "std": statistics.stdev(vals),
+            "values": vals,
+        }
+        for m, vals in values.items()
+    }
+    result = NoiseFloorResult(
+        samples_in=str(samples_in),
+        repeats=repeats,
+        n_scenarios=n_scenarios,
+        metrics=summary,
+    )
+    if scores_out is not None:
+        from src.agent.llm import _judge_model_for
+
+        out = Path(scores_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps({"judge_model": _judge_model_for(), **asdict(result)}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    return result
+
+
 def main() -> None:  # pragma: no cover - thin CLI wrapper
     from argparse import ArgumentParser
 
@@ -382,21 +479,59 @@ def main() -> None:  # pragma: no cover - thin CLI wrapper
     parser.add_argument("--samples-out", type=Path)
     parser.add_argument("--samples-in", type=Path)
     parser.add_argument("--scores-out", type=Path)
+    parser.add_argument(
+        "--metrics",
+        type=str,
+        default=None,
+        help="comma-separated subset of: " + ", ".join(METRIC_NAMES),
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="judge the same saved trace N times and report mean/std (requires --samples-in)",
+    )
     args = parser.parse_args()
+
+    metrics = (
+        tuple(m.strip() for m in args.metrics.split(",") if m.strip())
+        if args.metrics
+        else METRIC_NAMES
+    )
+
+    if args.repeat > 1:
+        if args.samples_in is None:
+            parser.error("--repeat requires --samples-in (judge-only reruns, no regeneration)")
+        result = run_noise_floor(
+            args.samples_in,
+            repeats=args.repeat,
+            metrics=metrics,
+            pipeline=args.pipeline,
+            scores_out=args.scores_out,
+        )
+        print(
+            f"Noise floor: {result.repeats} judge passes over "
+            f"{result.n_scenarios} scenarios ({result.samples_in})"
+        )
+        for m, s in result.metrics.items():
+            runs = ", ".join(f"{v:.3f}" for v in s["values"])
+            print(f"  {m:20} mean={s['mean']:.3f}  std={s['std']:.3f}  runs=[{runs}]")
+        return
 
     scores = run_ragas_eval(
         retrieval_mode=args.mode,
         use_reranker=not args.no_rerank,
         pipeline=args.pipeline,
+        metrics=metrics,
         samples_in=args.samples_in,
         samples_out=args.samples_out,
         scores_out=args.scores_out,
     )
     print(f"RAGAS over {scores.n_scenarios} scenarios:")
-    for m in METRIC_NAMES:
+    for m in metrics:
         print(f"  {m:20} {getattr(scores, m):.3f}")
     for diff, ms in sorted(scores.per_difficulty.items()):
-        print(f"  [{diff}] " + "  ".join(f"{m}={ms[m]:.2f}" for m in METRIC_NAMES))
+        print(f"  [{diff}] " + "  ".join(f"{m}={ms.get(m, 0.0):.2f}" for m in metrics))
 
 
 if __name__ == "__main__":

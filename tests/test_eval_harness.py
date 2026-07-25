@@ -9,6 +9,7 @@ without a key, an index, or ragas installed. The live scoring itself runs out-of
 from __future__ import annotations
 
 import json
+import statistics
 
 import pytest
 
@@ -155,6 +156,52 @@ class TestAggregate:
         ]
         # NaN dropped -> mean over the one real value = 1.0, not 0.5
         assert ragas_eval.aggregate(rows).faithfulness == 1.0
+
+
+class TestNoiseFloor:
+    def test_repeats_below_two_rejected(self) -> None:
+        with pytest.raises(ValueError, match="at least 2 repeats"):
+            ragas_eval.run_noise_floor("trace.jsonl", repeats=1)
+
+    def test_aggregates_mean_and_std_over_judge_only_reruns(self, monkeypatch) -> None:
+        calls: list[dict] = []
+        faith_values = iter([0.50, 0.60, 0.55])
+
+        def fake_eval(*, samples_in, metrics, pipeline):
+            calls.append({"samples_in": samples_in, "metrics": metrics, "pipeline": pipeline})
+            return ragas_eval.RagasScores(next(faith_values), 0.0, 0.0, 0.0, 50, {})
+
+        monkeypatch.setattr(ragas_eval, "run_ragas_eval", fake_eval)
+
+        result = ragas_eval.run_noise_floor("trace.jsonl", repeats=3, metrics=("faithfulness",))
+
+        assert len(calls) == 3
+        # judge-only: every rerun reads the saved trace, none regenerates answers
+        assert all(c["samples_in"] == "trace.jsonl" for c in calls)
+        assert all(c["metrics"] == ("faithfulness",) for c in calls)
+        assert result.n_scenarios == 50
+        stats = result.metrics["faithfulness"]
+        assert stats["values"] == [0.50, 0.60, 0.55]
+        assert stats["mean"] == pytest.approx(0.55)
+        assert stats["std"] == pytest.approx(statistics.stdev([0.50, 0.60, 0.55]))
+
+    def test_writes_summary_with_judge_model(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr(
+            ragas_eval,
+            "run_ragas_eval",
+            lambda **k: ragas_eval.RagasScores(0.5, 0.0, 0.0, 0.0, 2, {}),
+        )
+        monkeypatch.setattr("src.agent.llm._judge_model_for", lambda: "ragas-judge-dev")
+        out = tmp_path / "noise.json"
+
+        ragas_eval.run_noise_floor(
+            "trace.jsonl", repeats=2, metrics=("faithfulness",), scores_out=out
+        )
+
+        payload = json.loads(out.read_text())
+        assert payload["judge_model"] == "ragas-judge-dev"
+        assert payload["repeats"] == 2
+        assert payload["metrics"]["faithfulness"]["values"] == [0.5, 0.5]
 
 
 class TestRagasWorkers:
