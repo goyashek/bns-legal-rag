@@ -1,7 +1,7 @@
 [project]
-name = "agentic-legal-rag"
+name = "bns-legal-rag"
 version = "0.1.0"
-description = "Agentic, self-correcting RAG for Indian criminal law (BNS/BNSS/BSA) with hybrid retrieval, a deterministic citation validator, and dual evaluation."
+description = "RAG for Indian criminal law (BNS/BNSS/BSA) with hybrid retrieval, a deterministic citation validator, and dual evaluation."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }

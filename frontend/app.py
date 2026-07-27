@@ -62,8 +62,8 @@ def render_advice(advice: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Agentic Legal RAG: Indian Criminal Law", page_icon="⚖️")
-    st.title("⚖️ Agentic Legal RAG")
+    st.set_page_config(page_title="BNS Legal RAG: Indian Criminal Law", page_icon="⚖️")
+    st.title("⚖️ BNS Legal RAG")
     st.caption("Indian criminal law (BNS / BNSS / BSA). Statutory information, not legal advice.")
 
     with st.form("legal-query"):

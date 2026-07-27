@@ -1,4 +1,4 @@
-# ⚖️ Agentic Legal RAG: Indian Criminal Law (BNS / BNSS / BSA)
+# ⚖️ BNS Legal RAG: Indian Criminal Law (BNS / BNSS / BSA)
 
 > A retrieval-augmented question-answering system for Indian criminal law, and a record of what I learned building it. The live path uses dense retrieval and a deterministic citation check. The larger self-correcting agent I built first is kept for comparison, because measuring it against the simpler path is part of the story.
 
