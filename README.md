@@ -1,22 +1,180 @@
 # ⚖️ BNS Legal RAG: Indian Criminal Law (BNS / BNSS / BSA)
+### Retrieval-augmented statutory QA with citations checked in code
 
-> A retrieval-augmented question-answering system for Indian criminal law, and a record of what I learned building it. The live path uses dense retrieval and a deterministic citation check. The larger self-correcting agent I built first is kept for comparison, because measuring it against the simpler path is part of the story.
-
-> ⚠️ Statutory information, not legal advice. Not a substitute for a lawyer.
-
-> 🚧 **Status:** the live path, API, and Streamlit client are complete. The 12-node self-correcting graph is retained as an experiment rather than the default, for reasons the evaluation section explains.
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-0.2-1C3C3C)
+![Qdrant](https://img.shields.io/badge/Qdrant-embedded-DC244C?logo=qdrant&logoColor=white)
+[![Live demo](https://img.shields.io/badge/Streamlit-Live%20Demo-FF4B4B?logo=streamlit&logoColor=white)](https://bns-legal-rag.streamlit.app/)
+![Faithfulness](https://img.shields.io/badge/RAGAS--50%20faithfulness-0.543-blue)
+![Recall](https://img.shields.io/badge/Recall%405-0.750-blue)
+![License](https://img.shields.io/badge/Code%20license-MIT-green)
 
 ---
 
-## Why I built this
+## At a glance
 
-Indian legal RAG is a crowded space (LexGrid, NYAYA.ai, Legal Assist AI, BNS Mitra, and others). Rather than add another chatbot, I wanted to build something I could actually check: statute-aware retrieval, direct section lookup, a citation check written in code, and an evaluation record honest enough to include its own negative results.
+[🚀 Try the live demo](https://bns-legal-rag.streamlit.app/) · [📄 RAGAS record](docs/ragas-50-results.md) · [📓 Eval dashboard](notebooks/03_eval_dashboard.ipynb)
 
-The 2023–2024 legal transition gave the project a concrete reason to exist. The IPC, CrPC, and Evidence Act were replaced by the BNS, BNSS, and BSA, and general-purpose LLMs still answer with the *repealed* IPC sections. This system carries an IPC→BNS mapping and answers in the new code.
+https://github.com/user-attachments/assets/afd29efb-3f38-4bb5-a9e3-a76482e3386e
 
-What I did not expect going in was how much of the work would be about *removing* machinery rather than adding it. The short version: I built the full self-correcting agent the literature recommends, measured it honestly, and found that its safety loop was hurting answer quality more than helping. The live system is the simpler thing that measurement pointed me toward. The sections below trace that path.
+> I built the self-correcting agent the literature recommends: a router, an intent expander,
+> an eight-way relevance grader, a generator, a citation validator, an LLM faithfulness checker,
+> and a rewrite loop that fed failures back for another attempt. It ran, and every node did what
+> I designed it to do. It also scored 0.309 on faithfulness over 50 scenarios, because the checker
+> kept rejecting answers that had already passed the citation check. I deleted the checker and the
+> loop, ran the same 50 scenarios, and got 0.517. What ships is the smaller system. The large graph
+> is still selectable, since comparing the two is most of what I learned here.
 
-## Architecture
+| | |
+|---|---|
+| **Task** | Cited answers about India's 2023 criminal codes |
+| **Corpus** | 1,059 sections / 1,155 chunks from BNS (358), BNSS (531), BSA (170) |
+| **Live path** | Dense retrieval, generation, deterministic citation validator, one bounded repair |
+| **Retrieval** | Recall@5 **0.750**, MRR **0.706**, P@5 0.200 on 50 labelled scenarios |
+| **Answers** | RAGAS-50 faithfulness **0.543**, relevancy 0.687, context recall 0.988 |
+| **Manual audit** | 35 of 50 answers fully correct against the enacted text, 13 partial, 2 wrong |
+| **Main finding** | Removing two agent nodes nearly doubled faithfulness |
+
+> ⚠️ Statutory information, not legal advice. Not a substitute for a lawyer.
+
+---
+
+## 📌 Overview
+
+The IPC, CrPC, and Evidence Act were repealed in 2024 and replaced by the BNS, BNSS, and BSA.
+Ask most general-purpose models about Indian criminal law and they will still answer with the
+dead sections, which is the gap this project addresses: statutory question answering that
+retrieves from the enacted 2023 codes, bridges old IPC references to their new equivalents,
+and shows its sources.
+
+Indian legal RAG is already a crowded space. LexGrid, NYAYA.ai, Legal Assist AI, and BNS Mitra
+all exist, so another chatbot was not worth building. A checkable one was. Every claim the
+system makes about which section applies can be traced to a retrieved chunk, and every number
+in the evaluation below came from a run I can point at, including the runs that made the system
+look worse.
+
+I built it as a progression rather than from a finished design: the full agent first, then the
+measurements that argued against most of it. The sections below follow that order.
+
+## 🧠 The core idea: the check has to be something a model cannot argue with
+
+Consider a specific failure. The retrieved context contains BNS 306, the generator writes a
+fluent answer, and somewhere in it the answer cites BNS 307. Both sections exist. Both concern
+related offences. The sentence reads perfectly well. A reader without the bare act open has no
+way to catch it, and neither does a scoring metric that rewards fluency.
+
+The usual fix is a second LLM asked whether the answer is faithful to its context. I built that
+and measured it, and it made things worse: faithfulness sat at 0.309 with the checker in the
+graph, largely because it rejected answers whose citations were already verifiable. A model
+grading a model gives you a second opinion, not a guarantee.
+
+So the shipped check is deliberately dumb. Pull every cited section out of the answer, compare
+it against the sections that were actually retrieved, and reject any answer that cites
+something absent. It runs in Python with no model call, it has a regression test pinning the
+306 versus 307 case, and it returns the same verdict every time. A rejected draft gets one
+repair attempt from the same chunks. If that also fails, the system says it is not confident
+rather than filling the gap.
+
+Everything else in this project is a tradeoff I measured. This part is the one I would call a
+guarantee.
+
+---
+
+## 🏆 Results
+
+Two things get measured separately: whether retrieval finds the right section, which needs no
+LLM and runs often, and whether the answer built on it is grounded, which costs money and runs
+at milestones. Every number is labelled with the model that produced it, and old runs keep their
+original labels.
+
+### Retrieval, no LLM involved
+
+Fifty hand-labelled scenarios in `data/eval/scenarios.jsonl`, split 19 easy, 24 medium, and 7
+hard, covering 66 distinct BNS sections. Each labelled section was verified to exist in the
+corpus first, so a miss is a retrieval failure rather than a typo. All rows use the rebuilt
+1,151-chunk corpus with `BAAI/bge-large-en-v1.5`.
+
+| config | P@5 | Recall@5 | MRR |
+|---|---|---|---|
+| BM25 only | 0.080 | 0.330 | 0.327 |
+| dense only | **0.200** | **0.750** | **0.706** |
+| hybrid RRF | 0.132 | 0.527 | 0.508 |
+| dense + reranker | 0.176 | 0.693 | 0.456 |
+| hybrid + reranker (legacy agent) | 0.164 | 0.630 | 0.422 |
+
+I built hybrid-plus-reranker first because that is the standard advice, and it lost to plain
+dense retrieval on every column. The reranker is a trade, not an upgrade: it pulls more relevant
+sections into the top 5 while demoting the single best exact match that BM25 had usually placed
+first. P@5 caps at 0.20 here because most scenarios have one to three relevant sections.
+
+Across the full generation window on the current 1,155-chunk index, average labelled-section
+recall is 0.970, up from 0.900, and 47 of 50 scenarios contain every labelled section, up from 43.
+That is not a top-5 metric, so it stays out of the table.
+
+### Answers, judged and then read by hand
+
+All eight runs use a DeepSeek Flash judge with local BGE-small embeddings. The first three used
+DeepSeek Flash control nodes with a DeepSeek Pro generator; the last five test a cheaper routing
+setup with Mistral Small for control, NVIDIA Nemotron for generation, and paid DeepSeek Pro only
+on fallback. The first two rows are the full self-correcting graph, the rest are the production
+path, and the last four use the 1,155-chunk index.
+
+| pipeline / retrieval | faithfulness | answer relevancy | context precision | context recall |
+|---|---:|---:|---:|---:|
+| full graph, dense, no reranker | 0.309 | 0.518 | 0.700 | 0.840 |
+| full graph, hybrid RRF + reranker | 0.314 | 0.386 | **0.709** | 0.732 |
+| production, dense, DeepSeek only | 0.517 | **0.749** | 0.615 | 0.919 |
+| production, current routing | 0.496 | 0.689 | 0.630 | 0.912 |
+| production, post-fix routing | 0.470 | 0.612 | 0.629 | **0.988** |
+| production, bounded repair | 0.517 | 0.686 | 0.607 | 0.975 |
+| production, grounded answers | **0.591** | 0.665 | 0.607 | 0.952 |
+| production, claim guards (current code) | 0.543 | 0.687 | 0.622 | **0.988** |
+
+Dropping the checker and the rewrite loop is what moved row one to row three. Context precision
+fell because the answer window widened to 12 chunks. Every production scenario returned a real
+answer, where the full graph ended 13 to 20 of them in a canned low-confidence reply. The best
+faithfulness in the project is 0.591, but that trace has not had the same manual legal audit as
+the bounded-repair one, so I do not treat it as the headline. The claim-guard row is a useful
+failure: two narrow rules that helped a two-case diagnostic then lost 0.048 faithfulness on the
+full set, and one answer, `s44`, ended mid-sentence and reproduced on retry, so I left it in the
+scored trace. Full record in [docs/ragas-50-results.md](docs/ragas-50-results.md).
+
+RAGAS scores grounding and fluency, not legal correctness, so I also read all 50 answers against
+the enacted text. On the final repair trace, 35 passed, 13 were useful but partial, and 2 were
+wrong, which is a 70% clean pass rate with 96% at least useful. One of the two failures had
+passed citation validation, which is the honest limit of a membership check: it proves the cited
+section was retrieved, not that the model picked the right offence. The audit also caught an
+answer applying BNS 106(2), a subsection India Code still lists as excluded from commencement.
+Section 106 context now carries that status and the validator rejects answers presenting it as
+law in force. See the [final repair audit](docs/final-repair-answer-audit.md).
+
+### The ablation behind the simplification
+
+Twenty scenarios, stratified and fixed, dense retrieval without reranking, DeepSeek V4 Flash for
+control and judging, V4 Pro for answers.
+
+| pipeline | faithfulness | answer relevancy | context precision | context recall |
+|---|---:|---:|---:|---:|
+| baseline | **0.433** | **0.718** | 0.737 | 0.796 |
+| baseline + grader | 0.426 | 0.714 | **0.844** | 0.823 |
+| baseline + grader + checker | 0.186 | 0.310 | 0.789 | 0.794 |
+| current full graph | 0.341 | 0.501 | 0.778 | **0.892** |
+
+The grader buys context precision, costs eight extra Flash calls per query, and barely moves the
+answer. The checker halves both answer-level metrics. A ten-answer statute audit agreed with the
+direction, so the live path drops both.
+
+### One external reference point
+
+On a 60-question stratified sample of the BhashaBench-Legal criminal slice with Cerebras
+`gpt-oss-120b`, the system scored 0.717 against a no-RAG baseline of 0.683, and 0.724 against
+0.690 on the 29 questions citing repealed IPC. At that sample size the gap is about two
+questions, so read it as directional rather than a result. This is the naive MCQ path, not the
+full agent.
+
+---
+
+## 🏗️ How a query flows
 
 ```mermaid
 flowchart TD
@@ -36,184 +194,68 @@ flowchart TD
     C2 -->|no| A5[Low-confidence response]
 ```
 
-The live graph has no retrieval rewrite loop. It gives one rejected draft a bounded repair from the same retrieved chunks after omitting rejected text, then returns low confidence if the citations still fail. The older full graph, with intent expansion, relevance grading, a faithfulness checker, and query rewriting, is still selectable for evaluation.
+Two paths reach an answer. A query naming an act and a section resolves through metadata with no
+embedding and no LLM call. Everything else goes through dense retrieval, generation, and the
+validator, with one bounded repair available and low confidence as the fallback. The live graph
+has no retrieval rewrite loop. The older 12-node version still has one and stays selectable, so
+the comparison in the results section can be reproduced.
 
-## What building this taught me
+| component | what it does | why it is built that way |
+|---|---|---|
+| exact-section fast path | `BNS 103` or `302 IPC` to a cited answer in under 50 ms | deterministic, free, and the most common question shape |
+| IPC to BNS bridge | maps repealed references onto the codes in force | this is where general models still answer wrong |
+| dense retrieval, 12-chunk window | one embedding call, no reranker | the reranker measured worse (see results) |
+| citation validator | rejects any cited section absent from the retrieved set | a check a model cannot be talked out of |
+| bounded repair | one rewrite from the same chunks, then low confidence | rewrite loops mostly retrieved the same text and failed again |
+| structured output | Pydantic answers carrying citations | gives the validator something to check |
 
-Four decisions changed my mind mid-project. Each one started as an assumption I inherited from tutorials or papers, and each one was overturned by a measurement.
+---
 
-**More agent machinery is not automatically better.** My first design was the textbook self-correcting agent: a router, an intent expander, an eight-way parallel relevance grader, a generator, a deterministic citation validator, an LLM faithfulness checker, and a rewrite loop feeding failures back for another attempt. It runs, and every node does what it was designed to do. But when I ran RAGAS over 50 scenarios, faithfulness sat at 0.309 and answer relevancy at 0.518. Reading the traces showed why. The checker kept rejecting answers that had already passed the deterministic citation check, the rewrite loop usually retrieved similar text and failed again, and 13 to 20 scenarios ended in a canned "low confidence" reply that scores as zero. When I stripped the checker and rewrite loop out and re-ran the same 50 scenarios on the simple path, faithfulness rose to 0.517 and answer relevancy to 0.749. Removing two components nearly doubled two of my headline numbers. The lesson I took from this is to treat every agent node as a claim that has to earn its place in a measurement, not as free safety.
+## 🔬 Two corpus bugs worth writing down
 
-**Chunking is a retrieval decision, not preprocessing.** An early diagnostic on the query "someone took my bicycle" kept failing, and the cause turned out to be BNS section 303. Semantic chunking had shredded it into 18 fragments, and the base-punishment sentence was cut across a chunk boundary, so no single chunk contained the complete clause. The generator could not ground the punishment and correctly refused. I fixed the root cause in the shared chunker rather than special-casing one section: semantic fragments are rejoined into complete sentences before being repacked into the 512-token budget. BNS 303 went from 18 fragments to 4, and the whole corpus dropped from 1,762 chunks to 1,151. For structured legal text where a single sentence carries the operative rule, how you split matters as much as how you retrieve.
+Both started as a retrieval failure and ended in the ingestion code. Neither was visible in an
+aggregate metric.
 
-The manual answer audit later exposed a separate PDF boundary bug. A footnote inside BNS section 2 resembled a repeated section start, so the parser kept the published section count while silently dropping definitions (5) to (39). Duplicate matches are now removed before section boundaries are calculated. Definition 2(31) for valuable security is present again, and the current local index contains 1,155 chunks from 1,059 sections. The earlier evaluation numbers below still refer to the recorded 1,151-chunk corpus.
+**1. Chunking is a retrieval decision, not preprocessing.**
 
-On the rebuilt index, a small deterministic query-hint layer and section-sibling expansion improved recall across the full generation context from 0.900 to 0.970 on the same 50 labelled scenarios. Complete labelled coverage rose from 43 to 47 scenarios. This is a keyless retrieval result using `BAAI/bge-large-en-v1.5`, dense retrieval, and no reranker; it is not a new answer-quality or RAGAS score.
+An early diagnostic on "someone took my bicycle" kept failing, and the cause was BNS 303.
+Semantic chunking had shredded that section into 18 fragments, and the sentence carrying the base
+punishment was cut across a chunk boundary, so no single chunk held the complete clause. The
+generator could not ground the punishment and correctly refused to state it.
 
-**Ablate your defaults, including the ones everyone uses.** Hybrid retrieval with a cross-encoder reranker is the standard recommendation, so I built it that way and treated it as settled. On the rebuilt corpus, dense-only retrieval beat it: Recall@5 of 0.750 against 0.630, and MRR of 0.706 against 0.422. The reranker turned out to be a trade rather than a win. It pulls more relevant sections into the top 5 but demotes the single best exact match, which BM25 had usually placed first. Once I could measure it, the "obvious" default was the weaker choice.
+The fix went into the shared chunker rather than special-casing one section: semantic fragments
+are rejoined into complete sentences before being repacked into the 512-token budget. BNS 303
+went from 18 fragments to 4, and the corpus from 1,762 chunks to 1,151. In statutory text one
+sentence usually carries the operative rule, which makes chunking a retrieval decision.
 
-**The piece I trust most is the one written in code.** Telling a model to cite sources only changes the shape of its answer. The deterministic citation validator checks, in plain Python, that every cited section actually appears in the retrieved set. It is the component I am most confident in and the one most systems skip, precisely because it is not an LLM and cannot be talked out of a rejection.
+**2. A footnote that looked like a section heading.**
 
-## Key features
+Reading answers by hand exposed a parsing bug. A footnote inside BNS section 2 resembled a
+repeated section start, so the parser matched it and silently dropped definitions (5) through
+(39). The parser verifies every parsed section count against the published totals, BNS 358, BNSS
+531, and BSA 170, and that check passed the whole time, because the count was never what broke.
+A validation that passes tells you less than you think.
 
-- **Deterministic citation validator.** Every cited `[Section, Act]` is verified against the retrieved set in code, not by a model.
-- **Bounded citation repair.** One rejected draft can be rewritten from the same retrieved chunks and exact validator errors after rejected text is omitted. A second invalid draft returns low confidence.
-- **Exact-section fast path.** `"BNS 103"` and `"302 IPC"` resolve through a direct metadata lookup in well under the 50 ms target, skipping both embedding and the LLM, with IPC references bridged to their BNS equivalents. The lookup also surfaces the enriched cognizable, bailable, and offence-category flags it already holds.
-- **Dense retrieval.** The default is the highest-scoring dense-only configuration, with no reranker and a 12-chunk answer context.
-- **IPC→BNS bridge.** Answers old-code references in the current statute, which is where general LLMs still go wrong.
-- **Experimental full graph.** Intent expansion, grading, checking, and rewriting remain available for reproducible comparisons.
-- **Auditable by design.** Answers carry structured citations and can include a LangSmith trace URL when tracing is configured.
+Duplicate matches are now removed before section boundaries are calculated. Definition 2(31) for
+valuable security is back, and the current index holds 1,155 chunks from 1,059 sections.
+Evaluation rows labelled 1,151 chunks predate this fix and keep that label.
 
-## Competitor comparison
+---
 
-The comparison below summarizes the systems I reviewed while scoping the project. Reported metrics use each project's own setup, so they are context rather than a leaderboard.
+## 🚀 Quickstart
 
-| System | Retrieval and agent loop | Grounding check | Reported evaluation |
-|---|---|---|---|
-| **This project** | Dense live path; legacy LangGraph rewrite loop for comparison | Deterministic cited-section membership check | 50-scenario retrieval set; eight recorded RAGAS-50 runs; 60-question BhashaBench-Legal sample |
-| **LexGrid** | Hybrid ANN + full-text RRF, reranking, exact-section bypass; single-shot | Citation format and distance threshold | 12-case suite: MRR 0.833, Recall@5 0.814, P@5 0.233, legal accuracy 0.703 |
-| **Legal Assist AI** | Dense FAISS retrieval with a prompt-based guardrail; single-shot | “I don't know” guardrail | BERTScore 76.9% |
-| **Indian Criminal Law RAG Agent** | Dense top-5 retrieval with a three-agent CrewAI loop | LLM grounding assessment | 20-query human evaluation: 85–90% top-5 relevance, 92% grounding |
+### Try it without installing anything
 
-The intended contribution is not a novel component. It is the combination of statute-aware retrieval, a deterministic citation check, and failure cases I actually report.
+[The live demo](https://bns-legal-rag.streamlit.app/) runs the dense path against the prebuilt
+index, rate limited and capped. The deployed copy lives in
+[bns-legal-rag-demo](https://github.com/goyashek/bns-legal-rag-demo); it calls a hosted
+`bge-large` endpoint for query embeddings instead of loading the model, which is what lets it run
+in about 250 MB.
 
-## Evaluation
+### Run it locally
 
-Every number below is labeled with the model that produced it. Historical runs stay labeled with their original model; changing the current routing aliases does not relabel them. Auditability is a first-class goal here, so the evaluation record stays honest about provenance and keeps its negative results.
-
-### Retrieval (pure, model-agnostic, no LLM)
-
-Post-repair baseline over the 50-scenario labeled set (`data/eval/scenarios.jsonl`, 19 easy / 24 medium / 7 hard, 66 distinct BNS sections; every labeled section was verified to exist in the corpus before it entered the set). All rows use the rebuilt 1,151-chunk corpus:
-
-| config | P@5 | Recall@5 | MRR |
-|---|---|---|---|
-| BM25 only | 0.080 | 0.330 | 0.327 |
-| dense only | **0.200** | **0.750** | **0.706** |
-| hybrid RRF | 0.132 | 0.527 | 0.508 |
-| dense + reranker | 0.176 | 0.693 | 0.456 |
-| hybrid + reranker (legacy agent) | 0.164 | 0.630 | 0.422 |
-
-The rebuilt corpus overturned my original hybrid assumption. Dense-only wins this retrieval-only set, and dense + reranker also beats hybrid + reranker. The node-level ablation and manual audit below both support dense without reranking as the live path. P@5 is low by construction, because most scenarios have one to three relevant sections, which caps a perfect single-answer at 0.20.
-
-The current 1,155-chunk index also has a separate full-generation-window check.
-Average labelled-section recall is 0.970, up from 0.900, and 47 of 50
-scenarios contain every labelled section, up from 43. This is not a top-5
-metric, so I keep it separate from the table above.
-
-### RAGAS (real generative task)
-
-All runs use a DeepSeek Flash judge with local BGE-small embeddings. The first three rows used DeepSeek Flash control nodes and a DeepSeek Pro generator. The last five test the current low-cost routing setup: Mistral Small for control calls, NVIDIA Nemotron for answer generation, and paid DeepSeek Pro only when the NVIDIA route fails. The first two rows use the older full self-correcting graph. The remaining rows use the simpler production pipeline with dense retrieval, generation, deterministic citation validation, and scope and out-of-corpus controls. The final three include one bounded citation repair. The final two use the central, fact-supported generator prompt, and the last row adds guards for cross-referenced punishments and closed statutory tables. The last four rows use the current 1,155-chunk index; the earlier rows use the recorded 1,151-chunk corpus.
-
-| pipeline / retrieval | faithfulness | answer relevancy | context precision | context recall |
-|---|---:|---:|---:|---:|
-| full graph, dense, no reranker | 0.309 | 0.518 | 0.700 | 0.840 |
-| full graph, hybrid RRF + reranker | 0.314 | 0.386 | **0.709** | 0.732 |
-| production, dense, no reranker, DeepSeek only | 0.517 | **0.749** | 0.615 | 0.919 |
-| production, dense, no reranker, current routing | 0.496 | 0.689 | 0.630 | 0.912 |
-| production, dense, no reranker, post-fix routing | 0.470 | 0.612 | 0.629 | **0.988** |
-| production, dense, no reranker, bounded repair | 0.517 | 0.686 | 0.607 | 0.975 |
-| production, dense, no reranker, grounded answers | **0.591** | 0.665 | 0.607 | 0.952 |
-| production, dense, no reranker, claim guards | 0.543 | 0.687 | 0.622 | **0.988** |
-
-Removing the checker and rewrite loop nearly doubled faithfulness (0.309 → 0.517) and answer relevancy (0.518 → 0.749) and lifted context recall to 0.919. Context precision dips (0.700 → 0.615) with the wider 12-chunk answer window. All 50 production scenarios returned a generated answer, and none fell back to the canned low-confidence reply that ended 13 to 20 scenarios in the full-graph runs. The 20-case node ablation and the ten-answer statute audit predicted this result, and the full production run confirmed it. Faithfulness at 0.517 is still middling, so this remains a local demo rather than a legal-answer service. See [the complete RAGAS record](docs/ragas-50-results.md).
-
-The current-routing run reused the same 50 scenarios. Mistral completed all 50 control calls. Answer generation recorded 46 successful Nemotron calls, 6 successful DeepSeek Pro fallbacks, and 4 failed Nemotron attempts; some scenarios generated more than once. Its saved trace has one low-confidence answer, no empty answers, and citations in all 50 rows. The final judge pass completed 200 paid DeepSeek Flash metric jobs without a missing result. The result is a cost and architecture experiment, not a clean model comparison, because the control and answer models changed together. The exact model counts and difficulty slices are in [the complete RAGAS record](docs/ragas-50-results.md).
-
-The post-fix run saved a new trace before judging. Its 200-metric-job pass scored
-0.470 faithfulness, 0.612 answer relevancy, 0.629 context precision, and 0.988
-context recall. Retrieval coverage improved, but six generic validator refusals
-pulled down the answer-level metrics. The judge used DeepSeek V4 Flash with
-thinking disabled, the same successful release behavior used for the earlier
-comparison.
-
-I used those six refusals as a frozen repair diagnostic. With the same pinned
-DeepSeek V4 Flash judge, the saved refusals scored 0.000 faithfulness and 0.000
-answer relevancy; the new saved trace scored 0.595 and 0.672. Context precision
-was effectively flat at 0.456 versus 0.450, and context recall stayed 1.000. All
-six new answers were citation-valid and high-confidence. The repair node fired
-on two of them; the other four produced valid first drafts on this rerun, so this
-small comparison measures the current pipeline rather than a six-case causal
-effect of the repair node. It does not replace the 50-scenario result.
-
-The final 50-scenario run does replace that small diagnostic. It scored 0.517
-faithfulness, 0.686 answer relevancy, 0.607 context precision, and 0.975 context
-recall. Against the post-fix trace, faithfulness gained 0.047 and relevancy
-gained 0.074. Precision fell 0.022 and recall fell 0.013. The same paid DeepSeek
-V4 Flash release judge completed all 200 metric jobs. Its internal requests and
-structured-output retries produced 856 successful provider calls, using
-1,725,442 input tokens and 142,484 output tokens. No answer was regenerated.
-
-The grounded-answer run was the previous headline result. The generator answers the
-central question first, avoids related offences whose conditions are absent,
-and uses the smallest sufficient set of sections. On the same 50 scenarios and
-the same release judge, faithfulness rose from 0.517 to 0.591. Answer relevancy
-was 0.665, context precision 0.607, and context recall 0.952. All 50 saved
-answers were high confidence and complete. The shorter output improves claim
-support, but this trace has not received the same full manual legal audit as the
-bounded-repair trace, so the project remains a supervised local demo.
-
-The claim-guard run is the current-code result. It keeps the grounded-answer
-prompt and adds two narrow rules for cross-referenced punishments and statutory
-table membership. The full 50-case score was 0.543 faithfulness, 0.687 answer
-relevancy, 0.622 context precision, and 0.988 context recall. The two-case gate
-had improved faithfulness, but that gain did not generalize: full-set
-faithfulness fell by 0.048 while the other three metrics improved. All 50 rows
-were high confidence and cited. One answer, `s44`, ended mid-sentence; an
-identical same-settings retry reproduced it, so I kept the original failure in
-the scored trace.
-
-I also checked all 50 post-fix answers manually against the enacted text.
-Thirty-one passed, twelve were useful but partial, and seven failed. The clean
-pass rate improved from 56% to 62%, while the pass-or-partial rate slipped from
-88% to 86%. Five old material failures are fixed, but five formerly partial
-answers now end at a generic validator refusal. This remains a supervised local
-demo. See the [post-fix answer audit](docs/post-fix-answer-audit.md) and the
-[earlier current-routing audit](docs/current-routing-answer-audit.md).
-
-The final repair trace improves that manual result to 35 passes, 13 partial
-answers, and 2 failures. Its clean-pass rate is 70%, and 96% of answers are at
-least useful. Six drafts entered repair; five passed citation validation, while
-one returned low confidence. One repaired answer still failed the legal audit,
-which is a useful reminder that citation membership cannot prove that the model
-selected the right central offence. See the
-[final repair audit](docs/final-repair-answer-audit.md).
-
-The audit also caught an answer applying BNS 106(2), even though India Code still lists that subsection as excluded from commencement. Section 106 context now includes that status, and the deterministic validator rejects an answer that presents subsection (2) as law in force.
-
-### MCQ external comparability: BhashaBench-Legal criminal slice (Cerebras `gpt-oss-120b`)
-
-I used `bharatgenai/BhashaBench-Legal` for external comparability: a real criminal-law slice of 1,825 MCQs, of which 579 cite repealed IPC, so the IPC→BNS bridge gets a proper external validation set. On a stratified 60-question sample (29 bridge-inclusive) against a no-RAG baseline:
-
-| tier | accuracy |
-|---|---|
-| system (RAG) | 0.717 |
-| no-RAG baseline | 0.683 |
-| bridge subset (29 Qs) | 0.724 vs 0.690 baseline |
-
-**Directional only, within noise.** With n=60, the overall +0.033 is roughly two questions and the bridge +0.034 is one. It shows that naive retrieve-then-pick is not hurting on this model and sample, which is not a significance claim. This is the naive MCQ path, not the full agent, and it is not cross-compared to any other model's number, because a different model or sample would make the comparison dishonest.
-
-### Ablations
-
-The dense, sparse, hybrid, and reranked retrieval rows are quantified above. I also ran a budget-limited node ablation on a fixed, stratified random 20-scenario sample, using dense retrieval without reranking, DeepSeek V4 Flash for control and judging, and V4 Pro for answers.
-
-| pipeline | faithfulness | answer relevancy | context precision | context recall |
-|---|---:|---:|---:|---:|
-| baseline | **0.433** | **0.718** | 0.737 | 0.796 |
-| baseline + grader | 0.426 | 0.714 | **0.844** | 0.823 |
-| baseline + grader + checker | 0.186 | 0.310 | 0.789 | 0.794 |
-| current full graph | 0.341 | 0.501 | 0.778 | **0.892** |
-
-This ablation is what convinced me to simplify. The plain baseline has the best answer-level scores. The grader improves context quality, but its answer-level effect is small and it costs eight extra Flash calls per query. The checker and rewrite loop add recall while reducing grounding and relevance on this sample. It is a 20-case diagnostic rather than a headline score, but the direction was clear, and the ten-answer statute audit agreed: the full graph produced five generic low-confidence replies after rejecting citation-valid answers, while the simple path answered all ten (five fully supported, five partial, with one partial answer misstating a sentence, now covered by a regression test). See [the complete RAGAS record](docs/ragas-50-results.md) and [the manual answer audit](docs/manual-answer-audit.md).
-
-### A failure handled safely
-
-The citation validator has a deterministic regression test for a high-risk failure. An answer that cites BNS 307 when only BNS 306 was retrieved is rejected before it can be returned. The production graph gives the draft one same-context repair and returns low confidence if that also fails. The older experimental graph can still rewrite and retrieve again. The rejection itself is deterministic and runs without an LLM.
-
-## Local setup
-
-Place the source PDFs named in Data & licensing under `data/raw/`. The command below regenerates the git-ignored corpus artifacts under `data/processed/`.
-
-The application exposes only two OpenAI-compatible model profiles: `easy` for bounded control tasks and `hard` for cited answer generation. RAGAS uses a third, separately pinned judge profile. The example configuration points these profiles at OmniRoute aliases, but each profile can instead use a direct provider or local server by changing its model, base URL, and API key. Provider fallback remains outside the application code.
+Put the source PDFs named under Data and licensing in `data/raw/`, then build the index. The
+artifacts under `data/processed/` are git-ignored and regenerated by that step.
 
 ```bash
 cp .env.example .env        # fill in LLM_API_KEY, LANGSMITH_API_KEY, HF_TOKEN
@@ -224,28 +266,87 @@ uv run uvicorn src.api.main:app --reload
 uv run streamlit run frontend/app.py
 ```
 
-API: `http://localhost:8000` · Frontend: `http://localhost:8501`
+API on `http://localhost:8000`, frontend on `http://localhost:8501`.
 
-## Current limitations
+### Reproduce the numbers
 
-- The current-code RAGAS-50 run scored 0.687 answer relevancy and 0.543 faithfulness, so this remains a local demo rather than a legal-advice service. One answer also ended mid-sentence. The free NVIDIA judge is suitable for small development checks, but the valid full score still required the paid pinned DeepSeek Flash judge.
+Retrieval metrics need no API key and no LLM, so the table in the results section is free to
+verify. Build the index first, since both commands read `data/processed/`.
 
-## Data & licensing
+```bash
+uv run python -m src.eval.retrieval_baseline --mode dense --no-rerank
+uv run pytest -q                                  # 73 tests
+```
 
-- **Corpus:** BNS / BNSS / BSA bare-act PDFs in `data/raw/` (not committed, Govt-of-India copyright, ingested for retrieval and evaluation, not redistributed). Source the enacted acts from **[India Code](https://indiacode.nic.in)**, the official portal: Bharatiya Nyaya Sanhita 2023 (Act 45, **358 sections**), Bharatiya Nagarik Suraksha Sanhita 2023 (Act 46, **531 sections**), Bharatiya Sakshya Adhiniyam 2023 (Act 47, **170 sections**). Save them as `bns.pdf`, `bnss.pdf`, `bsa.pdf`. The parser verifies each parsed section count against these published totals, and all three land exactly. The **IPC→BNS / CrPC→BNSS / Evidence→BSA** correspondence tables, used for the old-code bridge, come from the MHA "three new criminal laws" comparison summaries. Save the BNS↔IPC one as `COMPARISON SUMMARY BNS to IPC .pdf`. The cognizable and bailable flags are parsed from the BNSS First Schedule.
-- **Eval dataset** (gated, needs `HF_TOKEN`):
-  - `bharatgenai/BhashaBench-Legal`: **CC BY-4.0**, the criminal-law slice (1,825 MCQs) used for external comparability.
+RAGAS runs cost money and use the pinned judge. Answer traces are saved before judging, so a
+judge-only retry never regenerates answers.
 
-## Governance & security
+### Configuring models
 
-- **Auditable by design:** structured citations, with LangSmith trace links when tracing is configured.
-- ⚠️ **No auth on the API.** Fine for a local demo, but it must sit behind an API key or gateway before any public or cloud deployment.
+Two OpenAI-compatible profiles are exposed: `easy` for bounded control tasks and `hard` for cited
+answer generation, with a third pinned profile for the RAGAS judge. The example config points
+these at OmniRoute aliases, but any profile can use a direct provider or a local server by
+changing its model, base URL, and key. Provider fallback stays outside the application code.
+
+---
+
+## 📁 Repository anatomy
+
+```
+bns-legal-rag/
+├── src/
+│   ├── agent/          # graph.py (both pipelines), llm.py (model profiles), prompts/, nodes/
+│   ├── ingest/         # parse_pdf.py, chunk_chonkie.py, enrich_metadata.py
+│   ├── retrieval/      # index.py, hybrid.py, rerank.py (ablated out)
+│   ├── eval/           # retrieval_baseline.py, ragas_eval.py, mcq_eval.py, claim_audit.py
+│   ├── api/            # FastAPI service
+│   └── models/         # Pydantic answer and citation schemas
+├── tests/              # 73 tests, including the 306 vs 307 regression
+├── notebooks/          # data exploration, retrieval ablation, eval dashboard
+├── docs/               # the RAGAS record and four manual audits
+├── frontend/app.py     # Streamlit client for the local API
+└── data/               # raw/ (PDFs, not committed), processed/ (git-ignored), eval/scenarios.jsonl
+```
+
+`src/agent/nodes/` holds both pipelines. `fast_path.py`, `router.py`, `ood_gate.py`,
+`generator.py`, and `citation_validator.py` are live. `grader.py`, `checker.py`,
+`intent_expander.py`, and `rewriter.py` belong to the legacy graph and stay in the tree because
+deleting them would make the results section unreproducible.
+
+## 📚 Data and licensing
+
+Corpus PDFs come from [India Code](https://indiacode.nic.in): BNS 2023 (Act 45, 358 sections),
+BNSS 2023 (Act 46, 531 sections), BSA 2023 (Act 47, 170 sections), saved as `bns.pdf`, `bnss.pdf`,
+`bsa.pdf`. They are Government of India copyright, ingested for retrieval and evaluation and not
+redistributed. The old-code bridge is built from the MHA comparison summaries, and the cognizable
+and bailable flags are parsed from the BNSS First Schedule. The MCQ set is
+`bharatgenai/BhashaBench-Legal` (CC BY-4.0, gated, needs `HF_TOKEN`), criminal slice only.
+
+## ⚖️ Limitations
+
+Faithfulness of 0.543 and two wrong answers out of 50 in the manual audit make this a supervised
+demo rather than a legal service. One answer in the current-code run also ended mid-sentence. The
+API has no authentication, which is fine locally; the deployed demo relies on a rate limit and a
+daily cap instead, and anything more public would need a key or a gateway.
+
+Every full 50-scenario score reported above was produced by the paid pinned DeepSeek Flash judge,
+200 metric jobs per run. The free judge is used only for small development checks, because it is
+not reliable enough to score a release.
+
+## 🛠️ Built with
+
+LangGraph, Qdrant, `BAAI/bge-large-en-v1.5` via sentence-transformers, rank-bm25, Chonkie,
+PyMuPDF, instructor with Pydantic, RAGAS, FastAPI, and Streamlit, with LangSmith tracing when
+configured.
 
 ## Further reading
 
 - [Why naive RAG fails on Indian criminal-law text](docs/why-naive-rag-fails.md)
+- [The complete RAGAS record](docs/ragas-50-results.md)
 - [The RAGAS judge noise floor](docs/noise-floor.md)
+- [The final repair answer audit](docs/final-repair-answer-audit.md)
 
 ## License
 
-MIT (code). Eval datasets retain their own licenses (see above).
+MIT for the code. Evaluation datasets keep their own licences, and the statute PDFs remain
+Government of India copyright.
