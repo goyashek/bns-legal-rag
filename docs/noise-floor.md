@@ -11,7 +11,7 @@ much is just the judge scoring the same answers differently each time.
 The study is judge-only. It reads one frozen answer trace and re-scores it, so no
 answer is regenerated and only the evaluator path varies between passes. That
 isolates evaluator noise from generator noise, which is the whole point. It also
-matches the cost policy in `AGENTS.md`: never regenerate answers just because the
+matches the project's evaluation cost rule: never regenerate answers just because the
 judge settings changed.
 
 - Trace: `data/eval/ragas-grounded-final-50.jsonl` (the grounded-answer headline,
