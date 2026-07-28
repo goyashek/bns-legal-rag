@@ -13,7 +13,7 @@
 
 ## At a glance
 
-[🚀 Try the live demo](https://bns-legal-rag.streamlit.app/) · [📄 RAGAS record](docs/ragas-50-results.md) · [📓 Eval dashboard](notebooks/03_eval_dashboard.ipynb)
+[🚀 Try the live demo](https://bns-legal-rag.streamlit.app/) · [📄 RAGAS record](docs/ragas-50-results.md) · [🔍 Answer audit](docs/final-repair-answer-audit.md)
 
 https://github.com/user-attachments/assets/afd29efb-3f38-4bb5-a9e3-a76482e3386e
 
@@ -174,6 +174,23 @@ full agent.
 
 ---
 
+## 🧭 How this compares
+
+These are the systems I reviewed while scoping the project. Each metric comes from that
+project's own setup and test set, so this is context rather than a leaderboard.
+
+| System | Retrieval and agent loop | Grounding check | Reported evaluation |
+|---|---|---|---|
+| **This project** | Dense live path; legacy LangGraph rewrite loop for comparison | Deterministic cited-section membership check | 50-scenario retrieval set; eight recorded RAGAS-50 runs; 60-question BhashaBench-Legal sample |
+| **LexGrid** | Hybrid ANN + full-text RRF, reranking, exact-section bypass; single-shot | Citation format and distance threshold | 12-case suite: MRR 0.833, Recall@5 0.814, P@5 0.233, legal accuracy 0.703 |
+| **Legal Assist AI** | Dense FAISS retrieval with a prompt-based guardrail; single-shot | "I don't know" guardrail | BERTScore 76.9% |
+| **Indian Criminal Law RAG Agent** | Dense top-5 retrieval with a three-agent CrewAI loop | LLM grounding assessment | 20-query human evaluation: 85 to 90% top-5 relevance, 92% grounding |
+
+The contribution here is not a novel component. It is the combination of statute-aware retrieval,
+a deterministic citation check, and failure cases I actually report.
+
+---
+
 ## 🏗️ How a query flows
 
 ```mermaid
@@ -302,7 +319,6 @@ bns-legal-rag/
 │   ├── api/            # FastAPI service
 │   └── models/         # Pydantic answer and citation schemas
 ├── tests/              # 73 tests, including the 306 vs 307 regression
-├── notebooks/          # data exploration, retrieval ablation, eval dashboard
 ├── docs/               # the RAGAS record and four manual audits
 ├── frontend/app.py     # Streamlit client for the local API
 └── data/               # raw/ (PDFs, not committed), processed/ (git-ignored), eval/scenarios.jsonl

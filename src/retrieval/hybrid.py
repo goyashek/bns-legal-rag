@@ -20,7 +20,7 @@ from src.retrieval.index import BGE_QUERY_INSTRUCTION, tokenize
 class RetrievedChunk:
     """A chunk plus its retrieval scores, carried through the graph.
 
-    I keep dense/sparse/rrf scores separate so the ablation notebook can attribute
+    I keep dense/sparse/rrf scores separate so the retrieval ablation can attribute
     wins to each signal instead of one blended number.
     """
 
