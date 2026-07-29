@@ -5,8 +5,6 @@
 ![LangGraph](https://img.shields.io/badge/LangGraph-0.2-1C3C3C)
 ![Qdrant](https://img.shields.io/badge/Qdrant-embedded-DC244C?logo=qdrant&logoColor=white)
 [![Live demo](https://img.shields.io/badge/Streamlit-Live%20Demo-FF4B4B?logo=streamlit&logoColor=white)](https://bns-legal-rag.streamlit.app/)
-![Faithfulness](https://img.shields.io/badge/RAGAS--50%20faithfulness-0.543-blue)
-![Recall](https://img.shields.io/badge/Recall%405-0.750-blue)
 ![License](https://img.shields.io/badge/Code%20license-MIT-green)
 
 ---
