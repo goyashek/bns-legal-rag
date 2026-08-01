@@ -28,10 +28,10 @@ https://github.com/user-attachments/assets/afd29efb-3f38-4bb5-a9e3-a76482e3386e
 | **Task** | Cited answers about India's 2023 criminal codes |
 | **Corpus** | 1,059 sections / 1,155 chunks from BNS (358), BNSS (531), BSA (170) |
 | **Live path** | Dense retrieval, generation, deterministic citation validator, one bounded repair |
-| **Retrieval** | Recall@5 **0.750**, MRR **0.706**, P@5 0.200 on 50 labelled scenarios |
-| **Answers** | RAGAS-50 faithfulness **0.543**, relevancy 0.687, context recall 0.988 |
-| **Manual audit** | 35 of 50 answers fully correct against the enacted text, 13 partial, 2 wrong |
-| **Main finding** | Removing two agent nodes nearly doubled faithfulness |
+| **Retrieval** | Recall@5 **0.750**, MRR **0.706**, P@5 0.200 on 50 BNS development scenarios |
+| **Answers** | Current-code RAGAS-50: faithfulness **0.543**, relevancy 0.687, context recall 0.988 |
+| **Manual audit** | Earlier bounded-repair trace: 35 of 50 fully correct, 13 partial, 2 wrong |
+| **Main finding** | Removing two agent nodes raised faithfulness from 0.309 to 0.517 |
 
 > ⚠️ Statutory information, not legal advice. Not a substitute for a lawyer.
 
@@ -47,9 +47,8 @@ and shows its sources.
 
 Indian legal RAG is already a crowded space. LexGrid, NYAYA.ai, Legal Assist AI, and BNS Mitra
 all exist, so another chatbot was not worth building. A checkable one was. Every claim the
-system makes about which section applies can be traced to a retrieved chunk, and every number
-in the evaluation below came from a run I can point at, including the runs that made the system
-look worse.
+system makes about which section applies can be traced to a retrieved chunk. Each evaluation
+number below is tied to a documented run, including the runs that made the system look worse.
 
 I built it as a progression rather than from a finished design: the full agent first, then the
 measurements that argued against most of it. The sections below follow that order.
@@ -87,10 +86,10 @@ original labels.
 
 ### Retrieval, no LLM involved
 
-Fifty hand-labelled scenarios in `data/eval/scenarios.jsonl`, split 19 easy, 24 medium, and 7
-hard, covering 66 distinct BNS sections. Each labelled section was verified to exist in the
-corpus first, so a miss is a retrieval failure rather than a typo. All rows use the rebuilt
-1,151-chunk corpus with `BAAI/bge-large-en-v1.5`.
+Fifty hand-labelled development scenarios in `data/eval/scenarios.jsonl`, split 19 easy, 24
+medium, and 7 hard, covering 66 distinct BNS sections. Each labelled section was verified to
+exist in the corpus first, so a miss is a retrieval failure rather than a typo. All rows use the
+rebuilt 1,151-chunk corpus with `BAAI/bge-large-en-v1.5`.
 
 | config | P@5 | Recall@5 | MRR |
 |---|---|---|---|
@@ -294,7 +293,9 @@ uv run pytest -q                                  # 73 tests
 ```
 
 RAGAS runs cost money and use the pinned judge. Answer traces are saved before judging, so a
-judge-only retry never regenerates answers.
+judge-only retry never regenerates answers. Those generated traces stay local and are not part
+of the public repository; the public docs record their settings, aggregate scores, and manual
+audits.
 
 ### Configuring models
 
@@ -338,8 +339,9 @@ and bailable flags are parsed from the BNSS First Schedule. The MCQ set is
 
 ## ⚖️ Limitations
 
-Faithfulness of 0.543 and two wrong answers out of 50 in the manual audit make this a supervised
-demo rather than a legal service. One answer in the current-code run also ended mid-sentence. The
+The current-code run scored 0.543 faithfulness. In the separately audited bounded-repair trace,
+two of 50 answers were wrong. This is a supervised demo rather than a legal service. One answer
+in the current-code run also ended mid-sentence. The
 API has no authentication, which is fine locally; the deployed demo relies on a rate limit and a
 daily cap instead, and anything more public would need a key or a gateway.
 

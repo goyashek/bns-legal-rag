@@ -41,18 +41,17 @@ Three judge-only passes over the frozen grounded trace, faithfulness only.
 |---|---:|---:|---|
 | faithfulness | 0.569 | 0.029 | 0.543, 0.565, 0.600 |
 
-The same 50 answers, judged three times, scored 0.543 / 0.565 / 0.600 — a spread
+The same 50 answers, judged three times, scored 0.543 / 0.565 / 0.600, a spread
 of 0.057 with a sample std of 0.029.
 
 ## Reading
 
-This confirms the plateau is a metric-resolution limit, not a system or model
-limit. The recent architecture changes moved faithfulness by less than this noise
-band:
+These three passes show that single-pass judge variation is large enough to cover
+the recent score changes:
 
-- The claim-guard run scored 0.543 faithfulness — identical to one of the three
+- The claim-guard run scored 0.543 faithfulness, identical to one of the three
   values this study produced from the unchanged trace.
-- The grounded run scored 0.591 — inside the 0.543–0.600 re-judge range.
+- The grounded run scored 0.591, inside the 0.543 to 0.600 re-judge range.
 - The documented 0.048 grounded→claim-guard "regression" is smaller than the
   0.057 spread a single re-judge of the unchanged grounded trace produces.
 
@@ -62,15 +61,4 @@ claim-support audit, the answers are already well grounded and the headline
 metric can no longer resolve further improvement. Next steps, in order of value:
 report faithfulness with this error bar, raise self-consistency (strictness > 1)
 to shrink it, and promote the claim-level audit to a co-headline with a small
-validation study — rather than spending more iterations inside the noise band.
-
-## Reading
-
-If the std is on the order of the recent run-to-run metric changes (~0.05), those
-changes sit inside the ruler's own error bar, and the plateau is a
-metric-resolution limit rather than a system limit. In that case the right move
-is to stop optimizing against a single noisy judge pass: raise self-consistency,
-promote the claim-level audit (0.991 support ratio) to a co-headline, or report
-the metric with an error bar. If the std is small (well under the observed
-deltas), the recent changes are real signal and the plateau needs a different
-explanation.
+validation study instead of spending more iterations inside the noise band.
